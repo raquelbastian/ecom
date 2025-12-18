@@ -20,6 +20,25 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Ecommerce Features
+
+- Connects to MongoDB for product data
+- API route at `/api/products` fetches products from the database
+- Main page displays a product listing from MongoDB
+
+### Setup
+1. Add your MongoDB connection string to `.env.local` as `MONGODB_URI`.
+2. Seed the database with sample products:
+   ```bash
+   npx tsx scripts/seedProducts.ts
+   ```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+Visit [http://localhost:3000](http://localhost:3000) to view the product listing.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

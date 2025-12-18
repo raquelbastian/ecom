@@ -1,6 +1,38 @@
+"use client";
+
 import Image from "next/image";
+import { useEffect, useState } from 'react';
+
+interface Product {
+  _id: string;
+  product_id: string;
+  product_name: string;
+  category: string; 
+  discounted_price: number;
+  actual_price: number;
+  discount_percentage: number;
+  rating: number;
+  rating_count: number;
+  about_product: string;
+  user_id: string;
+  user_name: string;
+  review_id: string;
+  review_title: string;
+  review_content: string;
+  img_link: string;
+  product_link: string;
+
+}
 
 export default function Home() {
+  const [products, setProducts] = useState<Product[]>([]);
+
+  useEffect(() => {
+    fetch('/api/products')
+      .then(res => res.json())
+      .then(data => setProducts(data));
+  }, []);
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
@@ -58,6 +90,20 @@ export default function Home() {
           >
             Documentation
           </a>
+        </div>
+        <div className="mt-8">
+          <h1 className="text-2xl font-bold">Product Listing</h1>
+          <ul className="mt-4 space-y-4">
+            {products.map(product => (
+              <li key={product._id} className="border p-4 rounded-lg">
+                raqs
+                <p className="text-sm text-zinc-500 mb-2">Category: {product.category}</p>
+                <h2 className="text-xl font-semibold">{product.product_name}</h2>
+                <p className="text-zinc-600 dark:text-zinc-400">{product.about_product}</p>
+                <strong className="text-lg">${product.discounted_price}</strong>
+              </li>
+            ))}
+          </ul>
         </div>
       </main>
     </div>
