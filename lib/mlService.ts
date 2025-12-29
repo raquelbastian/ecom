@@ -113,3 +113,23 @@ export async function getRecommendationsWeightedHybrid(productId: string, n: num
     return null;
   }
 }
+
+export async function getTrendingProducts(n: number = 8) {
+  try {
+    const response = await axios.get(`http://localhost:8000/trending_products?n=${n}`);
+    return response.data; // expected shape: { trending: [...] }
+  } catch (error) {
+    console.error('Error fetching trending products:', error);
+    return null;
+  }
+}
+
+export async function getTrendingProductsML(n: number = 8) {
+  try {
+    const response = await axios.get(`http://localhost:8000/trending_products_ml?n=${n}`);
+    return response.data; // expected shape: { trending: [...] }
+  } catch (error) {
+    console.error('Error fetching ML-based trending products:', error);
+    return null;
+  }
+}

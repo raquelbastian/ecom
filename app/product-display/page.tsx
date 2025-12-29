@@ -40,21 +40,10 @@ export default function ProductDisplay() {
   const [reviewerOverlapRecs, setReviewerOverlapRecs] = useState<any[]>([]);
   const [hybridRecs, setHybridRecs] = useState<any[]>([]);
   const [weightedHybridRecs, setWeightedHybridRecs] = useState<any[]>([]);
-  const [weights, setWeights] = useState({
-    pca: 0.15,
-    review: 0.15,
-    content_pca: 0.4,
-    sentiment: 0.1,
-    topic: 0.1,
-    reviewer_overlap: 0.1
-  });
-  const [weightsInput, setWeightsInput] = useState(weights);
   const [productLoading, setProductLoading] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const [recLoading, setRecLoading] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
-  const [weightedHybridLoading, setWeightedHybridLoading] = useState(false);
-  const [weightedHybridError, setWeightedHybridError] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const productId = searchParams.get('product_id');
 
@@ -143,26 +132,31 @@ export default function ProductDisplay() {
     }
   };
 
-  const fetchWeightedHybridRecommendations = async () => {
-    if (!selectedProduct) return;
-    setWeightedHybridLoading(true);
-    setWeightedHybridError(null);
-    try {
-      const res = await getRecommendationsWeightedHybrid(selectedProduct.product_id, 5, weightsInput);
-      setWeightedHybridRecs(res && res.recommendations ? res.recommendations : []);
-    } catch (err) {
-      setWeightedHybridError(String(err));
-      setWeightedHybridRecs([]);
-    } finally {
-      setWeightedHybridLoading(false);
-    }
-  };
-
   // Automatically load recommendations when a product is selected
   useEffect(() => {
     if (!selectedProduct) return;
     fetchBothRecommendations();
+    // Fetch weighted hybrid recommendations automatically (no weights param)
+    (async () => {
+      setWeightedHybridRecs([]);
+      try {
+        const res = await getRecommendationsWeightedHybrid(selectedProduct.product_id, 5, {}); // pass empty object for default
+        setWeightedHybridRecs(res && res.recommendations ? res.recommendations : []);
+      } catch (err) {
+        setWeightedHybridRecs([]);
+      }
+    })();
   }, [selectedProduct]);
+
+  // Utility to filter unique product_ids in an array
+  function uniqueByProductId(arr: any[]) {
+    const seen = new Set();
+    return arr.filter((item) => {
+      if (!item.product_id || seen.has(item.product_id)) return false;
+      seen.add(item.product_id);
+      return true;
+    });
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16">
@@ -221,7 +215,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {classicRecs.map((r: any) => (
+                {uniqueByProductId(classicRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -262,7 +256,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {pcaRecs.map((r: any) => (
+                {uniqueByProductId(pcaRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -303,7 +297,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {reviewRecs.map((r: any) => (
+                {uniqueByProductId(reviewRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -344,7 +338,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {contentRecs.map((r: any) => (
+                {uniqueByProductId(contentRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -385,7 +379,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {contentPcaRecs.map((r: any) => (
+                {uniqueByProductId(contentPcaRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -426,7 +420,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {sentimentRecs.map((r: any) => (
+                {uniqueByProductId(sentimentRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -467,7 +461,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {topicRecs.map((r: any) => (
+                {uniqueByProductId(topicRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -508,7 +502,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {reviewerOverlapRecs.map((r: any) => (
+                {uniqueByProductId(reviewerOverlapRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -549,7 +543,7 @@ export default function ProductDisplay() {
                 </tr>
               </thead>
               <tbody>
-                {hybridRecs.map((r: any) => (
+                {uniqueByProductId(hybridRecs).map((r: any) => (
                   <tr key={r.product_id}>
                     <td className="border px-2 py-1 align-top">
                       {r.img_link ? (
@@ -572,29 +566,7 @@ export default function ProductDisplay() {
           {/* Weighted Hybrid Recommendations */}
           <div className="w-full max-w-5xl mt-8 flex flex-col gap-4">
             <h3 className="text-xl font-semibold mb-2">Weighted Hybrid Recommendations</h3>
-            <form className="flex flex-wrap gap-4 items-end mb-2" onSubmit={e => { e.preventDefault(); setWeights(weightsInput); fetchWeightedHybridRecommendations(); }}>
-              {Object.keys(weightsInput).map((key) => (
-                <div key={key} className="flex flex-col">
-                  <label htmlFor={`weight-${key}`} className="text-xs font-medium mb-1">{key.replace('_', ' ')}</label>
-                  <input
-                    id={`weight-${key}`}
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={weightsInput[key as keyof typeof weightsInput]}
-                    onChange={e => setWeightsInput({ ...weightsInput, [key]: parseFloat(e.target.value) })}
-                    className="border rounded px-2 py-1 w-20"
-                  />
-                </div>
-              ))}
-              <button type="submit" className="rounded bg-blue-600 text-white px-4 py-2">Get Weighted Hybrid</button>
-            </form>
-            {weightedHybridLoading ? (
-              <div>Loading weighted hybrid recommendations...</div>
-            ) : weightedHybridError ? (
-              <div className="text-red-600">Error: {weightedHybridError}</div>
-            ) : weightedHybridRecs.length > 0 ? (
+            {uniqueByProductId(weightedHybridRecs).length > 0 ? (
               <table className="min-w-full border text-sm table-fixed">
                 <colgroup>
                   <col style={{ width: '80px' }} />
@@ -613,7 +585,7 @@ export default function ProductDisplay() {
                   </tr>
                 </thead>
                 <tbody>
-                  {weightedHybridRecs.map((r: any) => (
+                  {uniqueByProductId(weightedHybridRecs).map((r: any) => (
                     <tr key={r.product_id}>
                       <td className="border px-2 py-1 align-top">
                         {r.img_link ? (

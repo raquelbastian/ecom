@@ -4,7 +4,10 @@ from fastapi import FastAPI, Request, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
-from ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations
+from ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml
+from pymongo import MongoClient
+import os
+import pandas as pd
 
 app = FastAPI()
 
@@ -115,13 +118,75 @@ def recommend_hybrid(product_id: str, n: int = 5):
     return {"recommendations": recs.to_dict(orient="records")}
 
 @app.post("/recommend_weighted_hybrid/{product_id}")
-def recommend_weighted_hybrid(product_id: str, n: int = 5, req: WeightedHybridRequest = Body(...)):
-    """
-    Return top-n weighted hybrid recommendations for a given product_id.
-    Accepts weights as a JSON body: {"weights": {"pca": 0.2, "review": 0.1, ...}}
-    """
+def recommend_weighted_hybrid(
+    product_id: str,
+    n: int = 5,
+    req: WeightedHybridRequest = Body(...)
+):
     weights = req.weights
+    if not weights:
+        # Default weights favoring your high-performance models (SVD, KNN, Overlap)
+        weights = {
+            'basic_cosine': 0.0542,
+            'pca_features': 0.0743,
+            'content_tfidf': 0.2000,
+            'content_pca': 0.0578,
+            'review_text': 0.0003,
+            'sentiment': 0.1864,
+            'topic_lda': 0.0563,
+            'reviewer_overlap': 0.2247,
+            'knn_numeric': 0.0839,
+            'svd_collaborative': 0.0621
+        }
+
+    # Now calls the updated 10-model hybrid
     recs = get_weighted_hybrid_recommendations(product_id, N=n, weights=weights)
-    if isinstance(recs, list):
-        return {"recommendations": recs}
-    return {"recommendations": recs.to_dict(orient="records")}
+
+    if isinstance(recs, pd.DataFrame):
+        return {"recommendations": recs.to_dict(orient="records")}
+    return {"recommendations": []}
+
+@app.get("/trending_products")
+def trending_products(n: int = 8, min_rating: float = 4.0, min_reviews: int = 1):
+    """
+    Return top-n trending products based on the number of positive reviews (rating >= min_rating).
+    """
+    # MongoDB connection settings (reuse env vars if available)
+    MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://raquelbastian_db_user:oXu3M164d7HEwcVL@capstone.jucteam.mongodb.net")
+    MONGO_DB = os.environ.get("MONGO_DB", "capstone")
+    MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "products")
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB]
+    collection = db[MONGO_COLLECTION]
+
+    # Aggregate products by counting positive reviews (rating >= min_rating)
+    pipeline = [
+        {"$unwind": "$reviews"},
+        {"$match": {"reviews.rating": {"$gte": min_rating}}},
+        {"$group": {
+            "_id": "$product_id",
+            "product_name": {"$first": "$product_name"},
+            "category": {"$first": "$category"},
+            "img_link": {"$first": "$img_link"},
+            "discounted_price": {"$first": "$discounted_price"},
+            "rating": {"$first": "$rating"},
+            "positive_review_count": {"$sum": 1}
+        }},
+        {"$match": {"positive_review_count": {"$gte": min_reviews}}},
+        {"$sort": {"positive_review_count": -1, "rating": -1}},
+        {"$limit": n}
+    ]
+    results = list(collection.aggregate(pipeline))
+    # Convert _id to product_id for frontend
+    for r in results:
+        r["product_id"] = r.pop("_id")
+    return {"trending": results}
+
+@app.get("/trending_products_ml")
+def trending_products_ml(n: int = 8):
+    """
+    Return top-n trending products using ML-based hybrid score (positive reviews, avg rating, sentiment).
+    """
+    trending = get_trending_products_ml(N=n)
+    # Convert DataFrame to list of dicts for JSON
+    return {"trending": trending.to_dict(orient="records")}

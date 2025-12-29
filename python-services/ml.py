@@ -7,16 +7,69 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from pathlib import Path
 import json
+import pymongo
+from pymongo import MongoClient
+from sklearn.neighbors import NearestNeighbors
+from scipy.sparse.linalg import svds
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.decomposition import PCA, LatentDirichletAllocation
 
 # Get the absolute paths to dataset files using pathlib for clarity and cross-platform correctness
 _data_dir = Path(__file__).parent.joinpath('../app/dataset').resolve()
 _abs_csv_path = _data_dir.joinpath('amazon.csv')
 product_features_path = _data_dir.joinpath('product_features.csv')
-print(f"Resolved CSV path: {_abs_csv_path}")
-if not _abs_csv_path.exists():
-    raise FileNotFoundError(f"CSV file not found at: {_abs_csv_path}")
-# main products dataframe (kept as before)
-df = pd.read_csv(str(_abs_csv_path))
+
+# MongoDB connection settings
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://raquelbastian_db_user:oXu3M164d7HEwcVL@capstone.jucteam.mongodb.net")
+MONGO_DB = os.environ.get("MONGO_DB", "capstone")
+MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "products")
+
+def load_products_from_mongodb():
+    """Load products from MongoDB, clean currency/percent strings, and return as DataFrame."""
+    try:
+        client = MongoClient(MONGO_URI)
+        db = client[MONGO_DB]
+        collection = db[MONGO_COLLECTION]
+        products = list(collection.find())
+        if not products:
+            raise ValueError("No products found in MongoDB.")
+        
+        for p in products:
+            p.pop('_id', None)
+        
+        df_mongo = pd.DataFrame(products)
+
+        # --- DATA CLEANING STEP ---
+        # 1. Clean Discounted Price: remove ₹ and commas
+        if 'discounted_price' in df_mongo.columns:
+            df_mongo['discounted_price'] = df_mongo['discounted_price'].astype(str).str.replace('₹', '').str.replace(',', '')
+            df_mongo['discounted_price'] = pd.to_numeric(df_mongo['discounted_price'], errors='coerce').fillna(0)
+
+        # 2. Clean Actual Price: remove ₹ and commas
+        if 'actual_price' in df_mongo.columns:
+            df_mongo['actual_price'] = df_mongo['actual_price'].astype(str).str.replace('₹', '').str.replace(',', '')
+            df_mongo['actual_price'] = pd.to_numeric(df_mongo['actual_price'], errors='coerce').fillna(0)
+
+        # 3. Clean Discount Percentage: remove %
+        if 'discount_percentage' in df_mongo.columns:
+            df_mongo['discount_percentage'] = df_mongo['discount_percentage'].astype(str).str.replace('%', '')
+            df_mongo['discount_percentage'] = pd.to_numeric(df_mongo['discount_percentage'], errors='coerce').fillna(0)
+        
+        # 4. Clean Rating: ensure it is a float
+        if 'rating' in df_mongo.columns:
+            df_mongo['rating'] = pd.to_numeric(df_mongo['rating'], errors='coerce').fillna(0)
+
+        return df_mongo
+    except Exception as e:
+        print(f"MongoDB load and clean failed: {e}")
+        return None
+
+# Try to load from MongoDB only. Do not fallback to CSV.
+df = load_products_from_mongodb()
+if df is not None:
+    print("Loaded products from MongoDB.")
+else:
+    raise RuntimeError("Failed to load products from MongoDB. Please check your MongoDB connection and data.")
 
 # Note: product features will be loaded lazily via load_product_features()
 
@@ -764,22 +817,20 @@ def get_topic_recommendations(product_id, N=5, n_topics: int = 10):
 
 def get_reviewer_overlap_recommendations(product_id, N=5):
     """Return top-N products reviewed by users who also reviewed the given product."""
-    # Find users who reviewed the given product
+    global df
     users = set(df[df['product_id'] == product_id]['user_id'])
     if not users:
-        return []
-    # Find all products reviewed by these users (excluding the current product)
+        return pd.DataFrame() # Fixed: return empty DataFrame instead of list
+    
     overlap = df[df['user_id'].isin(users) & (df['product_id'] != product_id)]
-    # Count frequency of each product
     product_counts = overlap['product_id'].value_counts().head(N)
+    
     if product_counts.empty:
-        return []
-    # Get product details for the top-N
-    recs = df[df['product_id'].isin(product_counts.index)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
-    # Sort by frequency in product_counts
+        return pd.DataFrame() # Fixed: return empty DataFrame
+        
+    recs = df[df['product_id'].isin(product_counts.index)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']].drop_duplicates()
     recs['overlap_count'] = recs['product_id'].map(product_counts)
-    recs = recs.sort_values('overlap_count', ascending=False)
-    return recs
+    return recs.sort_values('overlap_count', ascending=False)
 
 def get_hybrid_recommendations(product_id, N=5):
     """
@@ -830,60 +881,216 @@ def get_hybrid_recommendations(product_id, N=5):
 
 def get_weighted_hybrid_recommendations(product_id, N=5, weights=None):
     """
-    Return top-N hybrid recommendations using user-defined weights for each recommender.
-    - weights: dict mapping method name to weight (e.g., {"content_pca": 0.5, "review": 0.2, ...})
-    Allowed keys: 'pca', 'review', 'content_pca', 'sentiment', 'topic', 'reviewer_overlap'
+    10-Model Hybrid Engine: Combines every strategy into one weighted score.
+    Now includes SVD and KNN.
     """
+    global df
+    if df is None:
+        return pd.DataFrame()
+
+    model_keys = [
+        'basic_cosine', 'pca_features', 'content_tfidf', 'content_pca', 
+        'review_text', 'sentiment', 'topic_lda', 'reviewer_overlap', 
+        'knn_numeric', 'svd_collaborative'
+    ]
+
     if weights is None:
-        # Default: equal weights
-        weights = {
-            'pca': 1,
-            'review': 1,
-            'content_pca': 1,
-            'sentiment': 1,
-            'topic': 1,
-            'reviewer_overlap': 1
-        }
+        weights = {k: 1.0/len(model_keys) for k in model_keys}
+
     # Normalize weights
     total = sum(weights.values())
-    if total == 0:
-        raise ValueError("At least one weight must be > 0")
     norm_weights = {k: v / total for k, v in weights.items()}
 
-    n_each = max(N * 2, 10)
-    # Get recommendations from each method
-    rec_methods = {
-        'pca': get_recommendations_with_pca(product_id, N=n_each),
-        'review': get_review_recommendations(product_id, N=n_each),
-        'content_pca': get_content_recommendations_pca(product_id, N=n_each),
-        'sentiment': get_sentiment_recommendations(product_id, N=n_each),
-        'topic': get_topic_recommendations(product_id, N=n_each),
-        'reviewer_overlap': get_reviewer_overlap_recommendations(product_id, N=n_each),
+    # Prepare indices for KNN and SVD
+    try:
+        df_knn, X_knn = prepare_features_for_knn(df)
+        p_idx = df[df['product_id'] == product_id].index[0]
+    except Exception:
+        p_idx = None
+
+    n_pool = N * 2
+    # Collect candidates from all 10 experts
+    recs_to_combine = {
+        'basic_cosine': get_recommendations(product_id, N=n_pool),
+        'pca_features': get_recommendations_with_pca(product_id, N=n_pool),
+        'content_tfidf': get_content_recommendations(product_id, N=n_pool),
+        'content_pca': get_content_recommendations_pca(product_id, N=n_pool),
+        'review_text': get_review_recommendations(product_id, N=n_pool),
+        'sentiment': get_sentiment_recommendations(product_id, N=n_pool),
+        'topic_lda': get_topic_recommendations(product_id, N=n_pool),
+        'reviewer_overlap': get_reviewer_overlap_recommendations(product_id, N=n_pool)
     }
-    # Build ranked lists
-    ranked_lists = {}
-    for key, recs in rec_methods.items():
-        if hasattr(recs, 'product_id'):
-            ids = recs['product_id'].tolist()
-        elif isinstance(recs, list):
-            ids = [r['product_id'] for r in recs if 'product_id' in r]
-        else:
-            ids = []
-        ranked_lists[key] = ids
-    # Weighted Borda count
+    
+    # Add KNN and SVD if valid index exists
+    if p_idx is not None:
+        recs_to_combine['knn_numeric'] = get_knn_recommendations(df, X_knn, p_idx, n=n_pool)
+        recs_to_combine['svd_collaborative'] = svd_product_recommendations(df, product_id, n=n_pool)
+
+    # Weighted Borda count scoring
     from collections import defaultdict
-    score = defaultdict(float)
-    for key, ids in ranked_lists.items():
-        w = norm_weights.get(key, 0)
-        for rank, pid in enumerate(ids):
-            score[pid] += w * (len(ids) - rank)
-    # Sort by total score, exclude the current product
-    sorted_pids = [pid for pid, _ in sorted(score.items(), key=lambda x: -x[1]) if pid != product_id]
+    final_scores = defaultdict(float)
+    
+    for method, rec_data in recs_to_combine.items():
+        # SAFE CHECK: Check if it's a non-empty DataFrame or a non-empty list
+        is_empty = True
+        if isinstance(rec_data, pd.DataFrame):
+            is_empty = rec_data.empty
+        elif isinstance(rec_data, list):
+            is_empty = (len(rec_data) == 0)
+
+        if not is_empty:
+            w = norm_weights.get(method, 0)
+            # Standardize to a list of product IDs for scoring
+            pids = rec_data['product_id'].tolist() if isinstance(rec_data, pd.DataFrame) else [r['product_id'] for r in rec_data if isinstance(r, dict)]
+            
+            for rank, pid in enumerate(pids):
+                # Points = weight * (pool_size - current_rank)
+                final_scores[pid] += w * (len(pids) - rank)
+
+    # Sort and return results
+    sorted_pids = [pid for pid, _ in sorted(final_scores.items(), key=lambda x: -x[1]) if pid != product_id]
     top_pids = sorted_pids[:N]
-    recs = df[df['product_id'].isin(top_pids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
-    recs['weighted_hybrid_score'] = recs['product_id'].map(score)
-    recs = recs.set_index('product_id').loc[top_pids].reset_index()
-    return recs
+    
+    return df[df['product_id'].isin(top_pids)].copy().assign(
+        hybrid_score=lambda d: d['product_id'].map(final_scores)
+    ).sort_values('hybrid_score', ascending=False).reset_index(drop=True)
+
+# --- ML-based Trending Products ---
+def get_trending_products_ml(N=10, weights=None):
+    """
+    Return top-N trending products using a hybrid ML-inspired score:
+    - Number of positive reviews (rating >= 4)
+    - Average rating
+    - Sentiment score (from aggregate_sentiment)
+    - (Optionally: recency if timestamp is present)
+    All features are normalized and combined with weights.
+    """
+    # Defensive: check required columns
+    required_cols = ['product_id', 'rating', 'review_content']
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in product DataFrame.")
+
+    # Create a working copy of the DataFrame
+    df_trend = df.copy()
+
+    # Count positive reviews (rating >= 4)
+    def count_positive_reviews(row):
+        if pd.isna(row['rating']):
+            return 0
+        # If multiple ratings, split and count
+        if isinstance(row['rating'], list):
+            ratings = row['rating']
+        else:
+            ratings = [r for r in str(row['rating']).split(',') if r.strip()]
+        count = 0
+        for r in ratings:
+            try:
+                if float(r) >= 4:
+                    count += 1
+            except Exception:
+                continue  # skip non-numeric
+        return count
+    df_trend['positive_review_count'] = df_trend.apply(count_positive_reviews, axis=1)
+    # Average rating
+    def avg_rating(row):
+        if pd.isna(row['rating']):
+            return 0.0
+        if isinstance(row['rating'], list):
+            ratings = row['rating']
+        else:
+            ratings = [r for r in str(row['rating']).split(',') if r.strip()]
+        vals = []
+        for r in ratings:
+            try:
+                vals.append(float(r))
+            except Exception:
+                continue
+        return np.mean(vals) if vals else 0.0
+    df_trend['avg_rating'] = df_trend.apply(avg_rating, axis=1)
+    # Sentiment score
+    sentiment_df = aggregate_sentiment(df_trend)
+    df_trend = df_trend.merge(sentiment_df, on='product_id', how='left')
+    # Normalize features
+    def norm(col):
+        arr = df_trend[col].values.astype(float)
+        minv, maxv = np.min(arr), np.max(arr)
+        if maxv - minv == 0:
+            return np.zeros_like(arr)
+        return (arr - minv) / (maxv - minv)
+    df_trend['norm_pos'] = norm('positive_review_count')
+    df_trend['norm_rating'] = norm('avg_rating')
+    df_trend['norm_sent'] = norm('sentiment_score')
+    # Weights for each feature
+    if weights is None:
+        weights = {'pos': 0.5, 'rating': 0.3, 'sent': 0.2}
+    # Compute trending score
+    df_trend['trending_score'] = (
+        weights['pos'] * df_trend['norm_pos'] +
+        weights['rating'] * df_trend['norm_rating'] +
+        weights['sent'] * df_trend['norm_sent']
+    )
+    # Sort and return top-N
+    df_trend = df_trend.drop_duplicates(subset="product_id")
+    df_trend = df_trend.sort_values('trending_score', ascending=False)
+    cols = ['product_id', 'product_name', 'category', 'avg_rating', 'positive_review_count', 'sentiment_score', 'trending_score', 'discounted_price', 'img_link']
+    return df_trend[cols].head(N)
+
+def prepare_features_for_knn(df, feature_cols=None):
+    """
+    Cleans and prepares feature matrix for KNN recommendations.
+    Returns cleaned DataFrame and feature matrix (numpy array).
+    """
+    if feature_cols is None:
+        feature_cols = ['discounted_price', 'actual_price', 'rating_count', 'discount_percentage', 'rating']
+    feature_cols = [c for c in feature_cols if c in df.columns]
+    for col in feature_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    df[feature_cols] = df[feature_cols].fillna(0)
+    X = df[feature_cols].values
+    return df, X
+
+def get_knn_recommendations(df, X, product_idx, n=5):
+    """
+    Fits a KNN model and returns n similar products for a given product index.
+    Returns a DataFrame with product details.
+    """
+    
+    knn = NearestNeighbors(n_neighbors=n+1, metric='cosine', algorithm='brute')
+    knn.fit(X)
+    query_vector = X[product_idx].reshape(1, -1)
+    distances, indices = knn.kneighbors(query_vector, n_neighbors=n+1)
+    similar_indices = indices.flatten()[1:]  # Exclude the product itself
+    return df.iloc[similar_indices][['product_id', 'product_name', 'rating', 'discounted_price']]
+
+def svd_product_recommendations(df, query_product_id, n=5):
+    """
+    Given a DataFrame with columns: user_id, product_id, rating, returns top-n similar products for a given product_id using SVD matrix factorization and cosine similarity.
+    """
+
+    # Create user-item matrix
+    user_item_matrix = df.pivot_table(index='user_id', columns='product_id', values='rating', fill_value=0)
+    # Center the data
+    user_ratings_mean = np.mean(user_item_matrix.values, axis=1)
+    R_demeaned = user_item_matrix.values - user_ratings_mean.reshape(-1, 1)
+    # Run SVD
+    U, sigma, Vt = svds(R_demeaned, k=20)
+    sigma = np.diag(sigma)
+    # Reconstruct predicted ratings
+    predicted_ratings = np.dot(np.dot(U, sigma), Vt) + user_ratings_mean.reshape(-1, 1)
+    pred_df = pd.DataFrame(predicted_ratings, index=user_item_matrix.index, columns=user_item_matrix.columns)
+    # Query for similar products by product_id
+    if query_product_id not in user_item_matrix.columns:
+        raise ValueError(f"Product ID {query_product_id} not found in the user-item matrix.")
+    product_idx = list(user_item_matrix.columns).index(query_product_id)
+    product_vector = pred_df.iloc[:, product_idx].values.reshape(1, -1)
+    all_product_vectors = pred_df.values.T  # shape: (num_products, num_users)
+    similarities = cosine_similarity(product_vector, all_product_vectors).flatten()
+    similar_indices = similarities.argsort()[::-1][1:n+1]
+    similar_product_ids = [user_item_matrix.columns[i] for i in similar_indices]
+    # Return DataFrame with product details
+    return df[df['product_id'].isin(similar_product_ids)][['product_id', 'product_name', 'rating', 'discounted_price']].drop_duplicates(subset=['product_id'])
+
 
 
 

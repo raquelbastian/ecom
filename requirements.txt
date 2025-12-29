@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+pandas
+scikit-learn
+numpy
+scipy
+joblib
+pyarrow
+textblob
+pymongo
+matplotlib
+seaborn
