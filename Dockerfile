@@ -8,6 +8,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy the application code and ML artifacts
+COPY ./python-services/ /app/python-services/
+COPY ./app/dataset/ /app/app/dataset/
+
 # Expose the port the app runs on
 EXPOSE 8000
 
