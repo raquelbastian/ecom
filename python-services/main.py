@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
-from ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml
+from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml
 from pymongo import MongoClient
 import os
 import pandas as pd
