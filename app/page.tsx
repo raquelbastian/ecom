@@ -14,6 +14,7 @@ export default async function HomePage() {
   // Fetch each category's top items in parallel on the server
   const fetches = CATEGORIES.map(c => getProducts({ category: c, limit: ITEMS_PER_SLOT, randomize: true }));
   const results = await Promise.all(fetches);
+  console.log('Products fetched for homepage:', results);
 
   // Fetch ML-based trending products (server-side)
   let trendingProducts: any[] = [];
@@ -39,9 +40,11 @@ export default async function HomePage() {
         </section>
 
         <section className="space-y-12">
-          {CATEGORIES.map((cat, idx) => (
-            <CategorySlot key={cat} title={cat} products={Array.isArray(results[idx]) ? results[idx] : []} />
-          ))}
+          {CATEGORIES.map((cat, idx) => {
+            const categoryProducts = results[idx];
+            const productsArray = Array.isArray(categoryProducts) ? categoryProducts : [];
+            return <CategorySlot key={cat} title={cat} products={productsArray} />;
+          })}
         </section>
       </div>
     </main>
