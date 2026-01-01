@@ -104,6 +104,16 @@ export async function getRecommendationsHybrid(productId: string, n: number = 5)
   }
 }
 
+export async function getRecommendationsSVD(productId: string, n: number = 5) {
+  try {
+    const response = await axios.get(`${API_URL}/recommend_svd/${encodeURIComponent(productId)}?n=${n}`);
+    return response.data; // expected shape: { recommendations: [...] }
+  } catch (error) {
+    console.error('Error calling SVD recommendation API:', error);
+    return null;
+  }
+}
+
 export async function getRecommendationsWeightedHybrid(productId: string, n: number = 5, weights: Record<string, number>) {
   try {
     const response = await axios.post(`${API_URL}/recommend_weighted_hybrid/${encodeURIComponent(productId)}?n=${n}`, {
@@ -132,6 +142,16 @@ export async function getTrendingProductsML(n: number = 8) {
     return response.data; // expected shape: { trending: [...] }
   } catch (error) {
     console.error('Error fetching ML-based trending products:', error);
+    return null;
+  }
+}
+
+export async function getRecommendationsKNN(productId: string, n: number = 5) {
+  try {
+    const response = await axios.get(`${API_URL}/recommend_knn/${encodeURIComponent(productId)}?n=${n}`);
+    return response.data;
+  } catch (error) {
+    console.error('Error calling KNN recommendation API:', error);
     return null;
   }
 }

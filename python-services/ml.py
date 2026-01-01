@@ -3,7 +3,7 @@ from sklearn.linear_model import LinearRegression
 import os
 import numpy as np
 import joblib
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from pathlib import Path
 import json
@@ -13,6 +13,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.sparse.linalg import svds
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import PCA, LatentDirichletAllocation
+from collections import defaultdict, Counter
 
 # Get the absolute paths to dataset files using pathlib for clarity and cross-platform correctness
 _data_dir = Path(__file__).parent.joinpath('../app/dataset').resolve()
@@ -817,21 +818,32 @@ def get_topic_recommendations(product_id, N=5, n_topics: int = 10):
 
 def get_reviewer_overlap_recommendations(product_id, N=5):
     """Return top-N products reviewed by users who also reviewed the given product."""
-    global df
-    users = set(df[df['product_id'] == product_id]['user_id'])
-    if not users:
-        return pd.DataFrame() # Fixed: return empty DataFrame instead of list
+    # Find all users who reviewed the target product
+    reviewers = df[df['product_id'] == product_id]['user_id'].unique()
+    if not reviewers.any():
+        return pd.DataFrame()
     
-    overlap = df[df['user_id'].isin(users) & (df['product_id'] != product_id)]
-    product_counts = overlap['product_id'].value_counts().head(N)
+    # Find all products reviewed by these users, excluding the target product
+    recommended_products = df[df['user_id'].isin(reviewers) & (df['product_id'] != product_id)]
     
-    if product_counts.empty:
-        return pd.DataFrame() # Fixed: return empty DataFrame
+    # Count the number of reviews for each product
+    product_counts = recommended_products['product_id'].value_counts()
+    
+    # Get the top N recommendations
+    top_n_products = product_counts.head(N)
+    
+    # Retrieve full product details
+    recommended_details = df[df['product_id'].isin(top_n_products.index)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', "img_link"]].drop_duplicates().set_index('product_id')
+    
+    if top_n_products.index.empty:
+        return pd.DataFrame()
         
-    recs = df[df['product_id'].isin(product_counts.index)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']].drop_duplicates()
-    recs['overlap_count'] = recs['product_id'].map(product_counts)
-    return recs.sort_values('overlap_count', ascending=False)
+    recommended_details = recommended_details.loc[top_n_products.index]
+    
+    return recommended_details.reset_index()
 
+
+# --- Hybrid Recommendation Engines ---
 def get_hybrid_recommendations(product_id, N=5):
     """
     Return top-N hybrid recommendations by aggregating ranks from multiple recommenders:
@@ -864,7 +876,6 @@ def get_hybrid_recommendations(product_id, N=5):
             ids = []
         ranked_lists.append(ids)
     # Borda count: assign points based on rank in each list
-    from collections import Counter, defaultdict
     score = defaultdict(int)
     for ids in ranked_lists:
         for rank, pid in enumerate(ids):
@@ -909,6 +920,7 @@ def get_weighted_hybrid_recommendations(product_id, N=5, weights=None):
         p_idx = None
 
     n_pool = N * 2
+    
     # Collect candidates from all 10 experts
     recs_to_combine = {
         'basic_cosine': get_recommendations(product_id, N=n_pool),
@@ -921,37 +933,39 @@ def get_weighted_hybrid_recommendations(product_id, N=5, weights=None):
         'reviewer_overlap': get_reviewer_overlap_recommendations(product_id, N=n_pool)
     }
     
-    # Add KNN and SVD if valid index exists
+    # Add KNN and SVD if possible
     if p_idx is not None:
-        recs_to_combine['knn_numeric'] = get_knn_recommendations(df, X_knn, p_idx, n=n_pool)
-        recs_to_combine['svd_collaborative'] = svd_product_recommendations(df, product_id, n=n_pool)
-
-    # Weighted Borda count scoring
-    from collections import defaultdict
-    final_scores = defaultdict(float)
+        try:
+            recs_to_combine['knn_numeric'] = get_knn_recommendations(df_knn, X_knn, p_idx, n=n_pool)
+        except Exception as e:
+            print(f"Could not get KNN recs: {e}")
+            recs_to_combine['knn_numeric'] = pd.DataFrame()
     
-    for method, rec_data in recs_to_combine.items():
-        # SAFE CHECK: Check if it's a non-empty DataFrame or a non-empty list
-        is_empty = True
-        if isinstance(rec_data, pd.DataFrame):
-            is_empty = rec_data.empty
-        elif isinstance(rec_data, list):
-            is_empty = (len(rec_data) == 0)
+    try:
+        recs_to_combine['svd_collaborative'] = svd_product_recommendations(df, product_id, n=n_pool)
+    except Exception as e:
+        print(f"Could not get SVD recs: {e}")
+        recs_to_combine['svd_collaborative'] = pd.DataFrame()
 
-        if not is_empty:
-            w = norm_weights.get(method, 0)
-            # Standardize to a list of product IDs for scoring
-            pids = rec_data['product_id'].tolist() if isinstance(rec_data, pd.DataFrame) else [r['product_id'] for r in rec_data if isinstance(r, dict)]
+    # Borda count scoring
+    final_scores = defaultdict(float)
+    for key, rec_data in recs_to_combine.items():
+        w = norm_weights.get(key, 0)
+        if w > 0 and isinstance(rec_data, pd.DataFrame) and not rec_data.empty and 'product_id' in rec_data.columns:
+            pids = rec_data['product_id'].tolist()
             
             for rank, pid in enumerate(pids):
                 # Points = weight * (pool_size - current_rank)
                 final_scores[pid] += w * (len(pids) - rank)
 
     # Sort and return results
+    if not final_scores:
+        return pd.DataFrame()
+
     sorted_pids = [pid for pid, _ in sorted(final_scores.items(), key=lambda x: -x[1]) if pid != product_id]
     top_pids = sorted_pids[:N]
     
-    return df[df['product_id'].isin(top_pids)].copy().assign(
+    return df[df['product_id'].isin(top_pids)].drop_duplicates(subset=['product_id']).assign(
         hybrid_score=lambda d: d['product_id'].map(final_scores)
     ).sort_values('hybrid_score', ascending=False).reset_index(drop=True)
 
@@ -1039,30 +1053,50 @@ def get_trending_products_ml(N=10, weights=None):
 def prepare_features_for_knn(df, feature_cols=None):
     """
     Cleans and prepares feature matrix for KNN recommendations.
-    Returns cleaned DataFrame and feature matrix (numpy array).
+    Selects numeric features, handles missing values, and scales them.
     """
     if feature_cols is None:
-        feature_cols = ['discounted_price', 'actual_price', 'rating_count', 'discount_percentage', 'rating']
-    feature_cols = [c for c in feature_cols if c in df.columns]
-    for col in feature_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df[feature_cols] = df[feature_cols].fillna(0)
-    X = df[feature_cols].values
-    return df, X
-
-def get_knn_recommendations(df, X, product_idx, n=5):
-    """
-    Fits a KNN model and returns n similar products for a given product index.
-    Returns a DataFrame with product details.
-    """
+        feature_cols = ['rating', 'discounted_price', 'actual_price', 'discount_percentage']
     
-    knn = NearestNeighbors(n_neighbors=n+1, metric='cosine', algorithm='brute')
-    knn.fit(X)
-    query_vector = X[product_idx].reshape(1, -1)
-    distances, indices = knn.kneighbors(query_vector, n_neighbors=n+1)
-    similar_indices = indices.flatten()[1:]  # Exclude the product itself
-    return df.iloc[similar_indices][['product_id', 'product_name', 'rating', 'discounted_price']]
+    # Ensure all required columns for features and final output are present
+    required_cols = feature_cols + ['product_id', 'product_name', 'category', 'img_link']
+    df_knn = df[required_cols].copy()
+    
+    # Impute missing values with the mean for numeric feature columns
+    for col in feature_cols:
+        df_knn[col] = pd.to_numeric(df_knn[col], errors='coerce')
+        # Use .loc to avoid SettingWithCopyWarning
+        df_knn.loc[:, col] = df_knn[col].fillna(df_knn[col].mean())
+        
+    # Scale features
+    scaler = StandardScaler()
+    X_knn = scaler.fit_transform(df_knn[feature_cols])
+    
+    return df_knn, X_knn
 
+def get_knn_recommendations(df_full, X_features, product_index, n=5):
+    """
+    Finds the N nearest neighbors for a given product index.
+    - df_full: The original, complete DataFrame with all product details.
+    - X_features: The scaled numeric feature matrix used for KNN.
+    - product_index: The integer index of the product in X_features.
+    - n: Number of recommendations to return.
+    """
+    nn = NearestNeighbors(n_neighbors=n + 1, metric='minkowski', p=2)
+    nn.fit(X_features)
+    
+    distances, indices = nn.kneighbors(X_features[product_index].reshape(1, -1))
+    
+    # Exclude the first result (which is the product itself)
+    rec_indices = indices.flatten()[1:]
+    
+    # Map these indices back to the original DataFrame to get full product details
+    recommended_products = df_full.iloc[rec_indices]
+    
+    # Ensure we return the required columns
+    return recommended_products[['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
+
+# --- SVD-based Collaborative Filtering ---
 def svd_product_recommendations(df, query_product_id, n=5):
     """
     Given a DataFrame with columns: user_id, product_id, rating, returns top-n similar products for a given product_id using SVD matrix factorization and cosine similarity.
@@ -1089,7 +1123,7 @@ def svd_product_recommendations(df, query_product_id, n=5):
     similar_indices = similarities.argsort()[::-1][1:n+1]
     similar_product_ids = [user_item_matrix.columns[i] for i in similar_indices]
     # Return DataFrame with product details
-    return df[df['product_id'].isin(similar_product_ids)][['product_id', 'product_name', 'rating', 'discounted_price']].drop_duplicates(subset=['product_id'])
+    return df[df['product_id'].isin(similar_product_ids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']].drop_duplicates(subset=['product_id'])
 
 
 

@@ -1,10 +1,10 @@
 # Basic FastAPI ML Service Example
 # Save this as python-services/main.py
-from fastapi import FastAPI, Request, Query, Body
+from fastapi import FastAPI, Request, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
-from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml
+from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml, svd_product_recommendations, prepare_features_for_knn, get_knn_recommendations
 from pymongo import MongoClient
 import os
 import pandas as pd
@@ -117,6 +117,31 @@ def recommend_hybrid(product_id: str, n: int = 5):
         return {"recommendations": recs}
     return {"recommendations": recs.to_dict(orient="records")}
 
+@app.get("/recommend_svd/{product_id}")
+def recommend_svd(product_id: str, n: int = 5):
+    """Return top-n SVD recommendations for a given product_id."""
+    recs = svd_product_recommendations(df, product_id, n=n)
+    if isinstance(recs, list):
+        return {"recommendations": recs}
+    return {"recommendations": recs.to_dict(orient="records")}
+
+@app.get("/recommend_knn/{product_id}")
+def recommend_knn(product_id: str, n: int = 5):
+    """Return top-n KNN-based recommendations for a given product_id."""
+    try:
+        df_knn, X_knn = prepare_features_for_knn(df)
+        product_indices = df_knn[df_knn['product_id'] == product_id].index
+        if product_indices.empty:
+            return {"recommendations": []}
+        product_idx = product_indices[0]
+        recs = get_knn_recommendations(df_knn, X_knn, product_idx, n=n)
+        if isinstance(recs, list):
+            return {"recommendations": recs}
+        return {"recommendations": recs.to_dict(orient="records")}
+    except Exception as e:
+        print(f"Error in KNN recommendation: {e}")
+        return {"recommendations": []}
+
 @app.post("/recommend_weighted_hybrid/{product_id}")
 def recommend_weighted_hybrid(
     product_id: str,
@@ -127,19 +152,18 @@ def recommend_weighted_hybrid(
     if not weights:
         # Default weights favoring your high-performance models (SVD, KNN, Overlap)
         weights = {
-            'basic_cosine': 0.0542,
-            'pca_features': 0.0743,
-            'content_tfidf': 0.2000,
-            'content_pca': 0.0578,
-            'review_text': 0.0003,
-            'sentiment': 0.1864,
-            'topic_lda': 0.0563,
-            'reviewer_overlap': 0.2247,
-            'knn_numeric': 0.0839,
-            'svd_collaborative': 0.0621
+            'basic_cosine': 0.0293, 
+            'pca_features': 0.0883,
+            'content_tfidf': 0.2967,
+            'content_pca': 0.1711, 
+            'review_text': 0.0779, 
+            'sentiment': 0.0935,
+            'topic_lda': 0.0709, 
+            'reviewer_overlap': 0.1381, 
+            'knn_numeric': 0.0085,
+            'svd_collaborative': 0.0257
         }
 
-    # Now calls the updated 10-model hybrid
     recs = get_weighted_hybrid_recommendations(product_id, N=n, weights=weights)
 
     if isinstance(recs, pd.DataFrame):
