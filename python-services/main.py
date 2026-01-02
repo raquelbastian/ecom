@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
-from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_hybrid_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml, svd_product_recommendations, prepare_features_for_knn, get_knn_recommendations
+from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml, svd_product_recommendations, prepare_features_for_knn, get_knn_recommendations
 from pymongo import MongoClient
 import os
 import pandas as pd
@@ -105,14 +105,6 @@ def recommend_topic(product_id: str, n: int = 5, n_topics: int = 10):
 def recommend_reviewer_overlap(product_id: str, n: int = 5):
     """Return top-n reviewer-overlap recommendations for a given product_id."""
     recs = get_reviewer_overlap_recommendations(product_id, N=n)
-    if isinstance(recs, list):
-        return {"recommendations": recs}
-    return {"recommendations": recs.to_dict(orient="records")}
-
-@app.get("/recommend_hybrid/{product_id}")
-def recommend_hybrid(product_id: str, n: int = 5):
-    """Return top-n hybrid recommendations for a given product_id (aggregated from all recommenders)."""
-    recs = get_hybrid_recommendations(product_id, N=n)
     if isinstance(recs, list):
         return {"recommendations": recs}
     return {"recommendations": recs.to_dict(orient="records")}

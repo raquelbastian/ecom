@@ -14,6 +14,8 @@ from scipy.sparse.linalg import svds
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import PCA, LatentDirichletAllocation
 from collections import defaultdict, Counter
+from sklearn.decomposition import TruncatedSVD
+import scipy.sparse as sp
 
 # Get the absolute paths to dataset files using pathlib for clarity and cross-platform correctness
 _data_dir = Path(__file__).parent.joinpath('../app/dataset').resolve()
@@ -843,52 +845,6 @@ def get_reviewer_overlap_recommendations(product_id, N=5):
     return recommended_details.reset_index()
 
 
-# --- Hybrid Recommendation Engines ---
-def get_hybrid_recommendations(product_id, N=5):
-    """
-    Return top-N hybrid recommendations by aggregating ranks from multiple recommenders:
-    - get_recommendations_with_pca
-    - get_review_recommendations
-    - get_content_recommendations_pca
-    - get_sentiment_recommendations
-    - get_topic_recommendations
-    - get_reviewer_overlap_recommendations
-    Uses a simple Borda count (rank sum) approach.
-    """
-    # Get recommendations from each method (up to N*2 to allow for overlap)
-    n_each = max(N * 2, 10)
-    rec_lists = [
-        get_recommendations_with_pca(product_id, N=n_each),
-        get_review_recommendations(product_id, N=n_each),
-        get_content_recommendations_pca(product_id, N=n_each),
-        get_sentiment_recommendations(product_id, N=n_each),
-        get_topic_recommendations(product_id, N=n_each),
-        get_reviewer_overlap_recommendations(product_id, N=n_each),
-    ]
-    # Flatten to product_id lists, preserving order (rank)
-    ranked_lists = []
-    for recs in rec_lists:
-        if hasattr(recs, 'product_id'):
-            ids = recs['product_id'].tolist()
-        elif isinstance(recs, list):
-            ids = [r['product_id'] for r in recs if 'product_id' in r]
-        else:
-            ids = []
-        ranked_lists.append(ids)
-    # Borda count: assign points based on rank in each list
-    score = defaultdict(int)
-    for ids in ranked_lists:
-        for rank, pid in enumerate(ids):
-            score[pid] += len(ids) - rank  # higher rank = more points
-    # Sort by total score, exclude the current product
-    sorted_pids = [pid for pid, _ in sorted(score.items(), key=lambda x: -x[1]) if pid != product_id]
-    top_pids = sorted_pids[:N]
-    # Get product details for the top-N
-    recs = df[df['product_id'].isin(top_pids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
-    # Preserve order
-    recs['hybrid_score'] = recs['product_id'].map(score)
-    recs = recs.set_index('product_id').loc[top_pids].reset_index()
-    return recs
 
 def get_weighted_hybrid_recommendations(product_id, N=5, weights=None):
     """
@@ -1097,34 +1053,82 @@ def get_knn_recommendations(df_full, X_features, product_index, n=5):
     return recommended_products[['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
 
 # --- SVD-based Collaborative Filtering ---
-def svd_product_recommendations(df, query_product_id, n=5):
+def svd_product_recommendations(df, query_product_id, n=5, n_components: int = 50, artifacts_dir: str = None):
     """
-    Given a DataFrame with columns: user_id, product_id, rating, returns top-n similar products for a given product_id using SVD matrix factorization and cosine similarity.
+    Faster, cache-friendly SVD-based recommendations using TruncatedSVD on a sparse user-item matrix.
     """
+    if artifacts_dir is None:
+        artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../app/dataset'))
+    os.makedirs(artifacts_dir, exist_ok=True)
+    svd_joblib_path = os.path.join(artifacts_dir, 'svd_item_factors.joblib')
+    svd_items_npy = os.path.join(artifacts_dir, 'svd_item_factors.npy')
 
-    # Create user-item matrix
-    user_item_matrix = df.pivot_table(index='user_id', columns='product_id', values='rating', fill_value=0)
-    # Center the data
-    user_ratings_mean = np.mean(user_item_matrix.values, axis=1)
-    R_demeaned = user_item_matrix.values - user_ratings_mean.reshape(-1, 1)
-    # Run SVD
-    U, sigma, Vt = svds(R_demeaned, k=20)
-    sigma = np.diag(sigma)
-    # Reconstruct predicted ratings
-    predicted_ratings = np.dot(np.dot(U, sigma), Vt) + user_ratings_mean.reshape(-1, 1)
-    pred_df = pd.DataFrame(predicted_ratings, index=user_item_matrix.index, columns=user_item_matrix.columns)
-    # Query for similar products by product_id
-    if query_product_id not in user_item_matrix.columns:
-        raise ValueError(f"Product ID {query_product_id} not found in the user-item matrix.")
-    product_idx = list(user_item_matrix.columns).index(query_product_id)
-    product_vector = pred_df.iloc[:, product_idx].values.reshape(1, -1)
-    all_product_vectors = pred_df.values.T  # shape: (num_products, num_users)
-    similarities = cosine_similarity(product_vector, all_product_vectors).flatten()
-    similar_indices = similarities.argsort()[::-1][1:n+1]
-    similar_product_ids = [user_item_matrix.columns[i] for i in similar_indices]
-    # Return DataFrame with product details
-    return df[df['product_id'].isin(similar_product_ids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']].drop_duplicates(subset=['product_id'])
+    # build index maps
+    prod_ids = df['product_id'].astype(str).unique().tolist()
+    user_ids = df['user_id'].astype(str).unique().tolist()
+    product_index = {pid: i for i, pid in enumerate(prod_ids)}
+    user_index = {uid: i for i, uid in enumerate(user_ids)}
+    n_users, n_items = len(user_ids), len(prod_ids)
 
+        # try load cached factors
+    item_factors = None
+    try:
+        if os.path.exists(svd_joblib_path):
+            cache = joblib.load(svd_joblib_path)
+            item_factors = cache.get('item_factors')
+            cached_map = cache.get('product_index')
+            # If we have a cached product_index, reconstruct prod_ids in the correct order
+            if cached_map and isinstance(cached_map, dict):
+                # Normalize keys to strings and indices to ints
+                product_index = {str(k): int(v) for k, v in cached_map.items()}
+                # Rebuild prod_ids list so row index -> product_id aligns with item_factors
+                prod_ids = [None] * len(product_index)
+                for pid, idx in product_index.items():
+                    prod_ids[int(idx)] = str(pid)
+                # Validate item_factors shape matches number of products; otherwise ignore cache
+                if item_factors is None or item_factors.shape[0] != len(prod_ids):
+                    item_factors = None
+    except Exception:
+        item_factors = None
 
+    # compute if needed
+    if item_factors is None:
+        # build sparse matrix (users x items)
+        rows = df['user_id'].astype(str).map(user_index).to_numpy()
+        cols = df['product_id'].astype(str).map(product_index).to_numpy()
+        vals = pd.to_numeric(df['rating'], errors='coerce').fillna(0).to_numpy()
+        mask = vals != 0
+        if not mask.any():
+            return pd.DataFrame()
+        rows, cols, vals = rows[mask], cols[mask], vals[mask]
+        user_item_sparse = sp.csr_matrix((vals, (rows, cols)), shape=(n_users, n_items))
 
+        k = max(1, min(int(n_components), n_items - 1))
+        svd = TruncatedSVD(n_components=k, algorithm='randomized', random_state=42)
+        # factor items by fitting on transposed sparse matrix
+        item_factors = svd.fit_transform(user_item_sparse.T)  # (n_items, k)
 
+        # persist artifacts
+        try:
+            joblib.dump({'item_factors': item_factors, 'product_index': product_index, 'svd_n_components': k}, svd_joblib_path)
+            np.save(svd_items_npy, item_factors)
+        except Exception:
+            pass
+
+    qid = str(query_product_id)
+    if qid not in product_index:
+        raise ValueError(f"Product ID {query_product_id} not found in product index.")
+    qidx = product_index[qid]
+
+    # cosine similarity in low-dim space
+    qvec = item_factors[qidx].reshape(1, -1)
+    sims = cosine_similarity(qvec, item_factors).flatten()
+    order = np.argsort(-sims)
+    top_idxs = [int(i) for i in order if int(i) != qidx][:n]
+    top_pids = [prod_ids[i] for i in top_idxs]
+
+    res = df[df['product_id'].astype(str).isin(top_pids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']].drop_duplicates(subset=['product_id'])
+    # preserve requested order
+    res['__order'] = res['product_id'].astype(str).map({pid: idx for idx, pid in enumerate(top_pids)})
+    res = res.sort_values('__order').drop(columns=['__order']).reset_index(drop=True)
+    return res

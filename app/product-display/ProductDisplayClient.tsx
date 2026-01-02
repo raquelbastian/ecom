@@ -4,7 +4,23 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
-import { getRecommendationsWeightedHybrid } from '@/lib/mlService';
+import {
+  getRecommendations,
+  getRecommendationsPCA,
+  getRecommendationsReviews,
+  getRecommendationsContent,
+  getRecommendationsContentPCA,
+  getRecommendationsSentiment,
+  getRecommendationsTopic,
+  getRecommendationsReviewerOverlap,
+  getRecommendationsHybrid,
+  getRecommendationsSVD,
+  getRecommendationsKNN,
+  getRecommendationsWeightedHybrid
+} from '@/lib/mlService';
+import Slider from 'react-slick';
+import "slick-carousel/slick/slick.css"; 
+import "slick-carousel/slick/slick-theme.css";
 
 interface Product {
   product_id: string;
@@ -77,13 +93,60 @@ export default function ProductDisplayClient() {
   useEffect(() => {
     if (!selectedProduct) return;
 
-    const fetchWeightedHybridRecommendations = async () => {
+    const fetchAllRecommendations = async () => {
       setRecLoading(true);
       setRecError(null);
       setWeightedHybridRecs([]);
       try {
-        const res = await getRecommendationsWeightedHybrid(selectedProduct.product_id, 5, {}); // pass empty object for default
-        setWeightedHybridRecs(res && res.recommendations ? res.recommendations : []);
+        // Fetch all recommendation types in parallel
+        type RecommendationResponse = { recommendations: any[] };
+
+        const [
+          classic,
+          pca,
+          review,
+          content,
+          contentPca,
+          sentiment,
+          topic,
+          reviewerOverlap,
+          svd,
+          knn,
+          weighted
+        ]: RecommendationResponse[] = await Promise.all([
+          getRecommendations(selectedProduct.product_id, 5),
+          getRecommendationsPCA(selectedProduct.product_id, 5),
+          getRecommendationsReviews(selectedProduct.product_id, 5),
+          getRecommendationsContent(selectedProduct.product_id, 5),
+          getRecommendationsContentPCA(selectedProduct.product_id, 5),
+          getRecommendationsSentiment(selectedProduct.product_id, 5),
+          getRecommendationsTopic(selectedProduct.product_id, 5),
+          getRecommendationsReviewerOverlap(selectedProduct.product_id, 5),
+          getRecommendationsSVD(selectedProduct.product_id, 5),
+          getRecommendationsKNN(selectedProduct.product_id, 5),
+          getRecommendationsWeightedHybrid(selectedProduct.product_id, 5, {})
+        ]);
+
+        const allRecs = {
+          classic_recs: classic?.recommendations || [],
+          pca_recs: pca?.recommendations || [],
+          review_recs: review?.recommendations || [],
+          content_recs: content?.recommendations || [],
+          content_pca_recs: contentPca?.recommendations || [],
+          sentiment_recs: sentiment?.recommendations || [],
+          topic_recs: topic?.recommendations || [],
+          reviewer_overlap_recs: reviewerOverlap?.recommendations || [],
+          svd_recs: svd?.recommendations || [],
+          knn_recs: knn?.recommendations || [],
+          recommendations: weighted?.recommendations || []
+        };
+
+        // Store all recommendations in session storage
+        sessionStorage.setItem(`recs-${selectedProduct.product_id}`, JSON.stringify(allRecs));
+
+        // Only set the weighted hybrid recs for display on this page
+        setWeightedHybridRecs(allRecs.recommendations);
+
       } catch (err) {
         setRecError(String(err));
         setWeightedHybridRecs([]);
@@ -92,7 +155,7 @@ export default function ProductDisplayClient() {
       }
     };
 
-    fetchWeightedHybridRecommendations();
+    fetchAllRecommendations();
   }, [selectedProduct]);
 
   // Utility to filter unique product_ids in an array
@@ -105,84 +168,118 @@ export default function ProductDisplayClient() {
     });
   }
 
-  return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16">
-      <h1 className="text-3xl font-bold mb-8 text-black dark:text-zinc-50">Product Details</h1>
-      {productLoading ? (
-        <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow text-center">Loading product...</div>
-      ) : productError ? (
-        <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow text-red-600">Error loading product: {productError}</div>
-      ) : selectedProduct ? (
-        <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow">
-          <h2 className="text-2xl font-bold">{selectedProduct.product_name}</h2>
-          <div className="flex items-center mb-2">
-            <span className="text-yellow-500 font-semibold mr-2">Rating:</span>
-            <span className="text-black dark:text-zinc-100">{selectedProduct.rating ?? 'N/A'}</span>
-          </div>
-          <p className="text-zinc-600 dark:text-zinc-400 mb-4">{selectedProduct.about_product}</p>
-          {selectedProduct.img_link ? (
-            <div className="mb-4 w-full relative" style={{ maxWidth: 400, height: 300 }}>
-              <Image src={selectedProduct.img_link} alt={selectedProduct.product_name} fill style={{ objectFit: 'cover' }} unoptimized />
-              <img src={selectedProduct.img_link} alt={selectedProduct.product_name} style={{ maxWidth: '100%', display: 'none' }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-            </div>
-          ) : null}
-          <div>
-            <strong className="text-lg mr-4">Price: ${selectedProduct.actual_price}</strong>
-          </div>
-        </div>
-      ) : (
-        <p>No product selected.</p>
-      )}
+  const sliderSettings = {
+    dots: true,
+    infinite: false,
+    speed: 500,
+    slidesToShow: 4,
+    slidesToScroll: 4,
+    responsive: [
+      {
+        breakpoint: 1024,
+        settings: {
+          slidesToShow: 3,
+          slidesToScroll: 3,
+        }
+      },
+      {
+        breakpoint: 600,
+        settings: {
+          slidesToShow: 2,
+          slidesToScroll: 2,
+        }
+      },
+      {
+        breakpoint: 480,
+        settings: {
+          slidesToShow: 1,
+          slidesToScroll: 1,
+        }
+      }
+    ]
+  };
 
-      {recLoading ? (
-        <div className="w-full max-w-2xl mt-8">Loading recommendations...</div>
-      ) : recError ? (
-        <div className="w-full max-w-2xl mt-8 text-red-600">Error loading recommendations: {recError}</div>
-      ) : (
-        <div className="w-full max-w-5xl mt-8 flex flex-col gap-8">
-          {/* Weighted Hybrid Recommendations */}
-          <div>
-            <h3 className="text-xl font-semibold mb-4">Weighted Hybrid Recommendations</h3>
-            <table className="min-w-full border text-sm table-fixed">
-              <colgroup>
-                <col style={{ width: '80px' }} />
-                <col style={{ width: '180px' }} />
-                <col style={{ width: '160px' }} />
-                <col style={{ width: '80px' }} />
-                <col style={{ width: '60px' }} />
-              </colgroup>
-              <thead>
-                <tr className="bg-zinc-100 dark:bg-zinc-800">
-                  <th className="border px-2 py-1">Image</th>
-                  <th className="border px-2 py-1">Product Name</th>
-                  <th className="border px-2 py-1">Category</th>
-                  <th className="border px-2 py-1">Price</th>
-                  <th className="border px-2 py-1">Rating</th>
-                </tr>
-              </thead>
-              <tbody>
-                {uniqueByProductId(weightedHybridRecs).map((r: any) => (
-                  <tr key={r.product_id}>
-                    <td className="border px-2 py-1 align-top">
-                      {r.img_link ? (
-                        <Image src={r.img_link} alt="" width={60} height={45} style={{ objectFit: 'cover', borderRadius: 4 }} unoptimized />
-                      ) : null}
-                    </td>
-                    <td className="border px-2 py-1 align-top max-w-[180px] truncate" title={r.product_name} style={{ wordBreak: 'break-word', whiteSpace: 'pre-line' }}>
-                      <Link href={`/product-display?product_id=${encodeURIComponent(r.product_id)}`}>{r.product_name}</Link>
-                    </td>
-                    <td className="border px-2 py-1 align-top max-w-[160px] truncate" title={r.category} style={{ wordBreak: 'break-word', whiteSpace: 'pre-line' }}>
-                      {r.category}
-                    </td>
-                    <td className="border px-2 py-1 align-top">${r.discounted_price}</td>
-                    <td className="border px-2 py-1 align-top">{r.rating ?? 'N/A'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+  return (
+    <div>
+      <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16">
+        <h1 className="text-3xl font-bold mb-8 text-black dark:text-zinc-50">Product Details</h1>
+        {productLoading ? (
+          <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow text-center">Loading product...</div>
+        ) : productError ? (
+          <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow text-red-600">Error loading product: {productError}</div>
+        ) : selectedProduct ? (
+          <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow">
+            <h2 className="text-2xl font-bold">{selectedProduct.product_name}</h2>
+            <div className="flex items-center mb-2">
+              <span className="text-yellow-500 font-semibold mr-2">Rating:</span>
+              <span className="text-black dark:text-zinc-100">{selectedProduct.rating ?? 'N/A'}</span>
+            </div>
+            <p className="text-zinc-600 dark:text-zinc-400 mb-4">{selectedProduct.about_product}</p>
+            {selectedProduct.img_link ? (
+              <div className="mb-4 w-full relative" style={{ maxWidth: 400, height: 300 }}>
+                <Image src={selectedProduct.img_link} alt={selectedProduct.product_name} fill style={{ objectFit: 'cover' }} unoptimized />
+                <img src={selectedProduct.img_link} alt={selectedProduct.product_name} style={{ maxWidth: '100%', display: 'none' }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+              </div>
+            ) : null}
+            <div>
+              <strong className="text-lg mr-4">Price: ${selectedProduct.actual_price}</strong>
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <p>No product selected.</p>
+        )}
+
+        {recLoading ? (
+        <div className="w-full max-w-2xl mt-8 flex justify-center">
+        <div className="flex items-center gap-3">
+        <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+      </svg>
+      <span className="text-gray-600">You may also like...</span>
+    </div>
+  </div>
+) : recError ? (
+          <div className="w-full max-w-2xl mt-8 text-red-600">Error loading recommendations: {recError}</div>
+        ) : (
+          <div className="w-full max-w-5xl mt-8 flex flex-col gap-8">
+            <div>
+              <h3 className="text-xl font-semibold mb-4">You may also like</h3>
+              <Slider {...sliderSettings}>
+                {uniqueByProductId(weightedHybridRecs).map((r: any) => (
+                  <div key={r.product_id} className="px-2">
+                    <div className="border rounded-lg p-4 flex flex-col items-center text-center h-full">
+                      <Link href={`/product-display?product_id=${encodeURIComponent(r.product_id)}`}>
+                        <div className="relative w-40 h-40">
+                          {r.img_link ? (
+                            <Image src={r.img_link} alt={r.product_name} layout="fill" objectFit="contain" className="rounded-t-lg" unoptimized />
+                          ) : <div className="w-full h-full bg-gray-200 rounded-t-lg"/>}
+                        </div>
+                      </Link>
+                      <div className="mt-2 flex-grow flex flex-col justify-between">
+                        <h4 className="font-semibold text-sm h-12 overflow-hidden">
+                          <Link href={`/product-display?product_id=${encodeURIComponent(r.product_id)}`}>{r.product_name}</Link>
+                        </h4>
+                        <div>
+                          <p className="mt-1 font-bold">${r.discounted_price}</p>
+                          <p className="mt-1 text-xs text-gray-500">Rating: {r.rating ?? 'N/A'}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </Slider>
+            </div>
+          </div>
+        )}
+      </div>
+      {selectedProduct && !recLoading && !recError && (
+    <div className="mt-8 text-center">
+    <Link href={`/product-display-recommend?product_id=${selectedProduct.product_id}`} className="text-blue-500 hover:underline">
+      Check recommendation computation
+    </Link>
+  </div>
+  )}
     </div>
   );
 }
