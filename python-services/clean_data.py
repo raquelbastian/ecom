@@ -93,6 +93,19 @@ def parse_rating(val: object) -> float:
         return np.nan
 
 
+def clean_img_link(val: object) -> object:
+    """Clean and validate image link URLs. Returns NaN if invalid."""
+    if pd.isna(val):
+        return np.nan
+    s = str(val).strip()
+    if not s or not (s.startswith('http://') or s.startswith('https://')):
+        return np.nan
+    # Optionally filter out known bad patterns (e.g., placeholder images)
+    if 'no_image' in s or 'placeholder' in s:
+        return np.nan
+    return s
+
+
 def build_index_map(df: pd.DataFrame, id_col: str = 'product_id') -> dict:
     """Return dict mapping product_id (string) -> integer index into df."""
     if id_col not in df.columns:
@@ -115,6 +128,10 @@ def clean_chunk(df_chunk: pd.DataFrame) -> pd.DataFrame:
     for col in ['price', 'discounted_price']:
         if col in df_chunk.columns:
             df_chunk[col] = df_chunk[col].apply(parse_price)
+
+    # clean img_link column if present
+    if 'img_link' in df_chunk.columns:
+        df_chunk['img_link'] = df_chunk['img_link'].apply(clean_img_link)
 
     return df_chunk
 
@@ -187,7 +204,7 @@ def main(csv_path: Path | str = None, out_dir: Path | str = None, chunksize: int
     except Exception:
         df_features = df_features.reset_index(drop=True)
 
-    # save artifacts
+        # save artifacts
     amazon_clean_path = out_dir.joinpath('amazon_clean.parquet')
     product_features_path = out_dir.joinpath('product_features.parquet')
     index_map_path = out_dir.joinpath('index_map.json')
@@ -195,15 +212,20 @@ def main(csv_path: Path | str = None, out_dir: Path | str = None, chunksize: int
     print(f"Writing cleaned full table to: {amazon_clean_path}")
     df_clean.to_parquet(amazon_clean_path, index=False)
 
+    # ensure df_features index is 0..n-1 and expose it as an explicit column so
+    # downstream code can rely on a canonical, persisted row ordering
+    df_features = df_features.reset_index(drop=True)
+    df_features['product_row'] = df_features.index.astype(int)
+
     print(f"Writing product features table to: {product_features_path}")
     df_features.to_parquet(product_features_path, index=False)
 
-    # build and save index map
+    # build and save ordered index map (list of product_id in df_features order)
     try:
-        idx_map = build_index_map(df_features, id_col='product_id')
+        ordered_ids = df_features['product_id'].astype(str).tolist()
         with open(index_map_path, 'w', encoding='utf-8') as fh:
-            json.dump(idx_map, fh, ensure_ascii=False, indent=2)
-        print(f"Wrote index map to: {index_map_path} (entries={len(idx_map)})")
+            json.dump(ordered_ids, fh, ensure_ascii=False, indent=2)
+        print(f"Wrote index map (ordered list) to: {index_map_path} (entries={len(ordered_ids)})")
     except Exception as e:
         print(f"Failed to write index map: {e}")
 

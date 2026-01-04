@@ -11,3 +11,4 @@ textblob
 pymongo
 matplotlib
 seaborn
+hnswlib

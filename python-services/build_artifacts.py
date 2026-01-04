@@ -1,58 +1,153 @@
-"""Build artifacts for the ML service.
-
-This script will:
-- Ensure product features are available (Parquet preferred; will write parquet if only CSV exists).
-- Build or load the preprocessor and encoded features (saved to encoded_features.parquet).
-- Build or load the cosine similarity matrix (saved to cosine_sim.npy).
-- Build and save an index_map.json mapping product_id -> row index.
-
-Run this script from the repository root using:
-  cd python-services && python3 build_artifacts.py
-
-"""
+import pandas as pd
+import joblib
+import json
 import os
 import sys
-from pathlib import Path
+from pymongo import MongoClient
+import ml # Ensure ml.py is in the same directory
+import numpy as np
 
-ROOT = Path(__file__).parent.resolve()
-print("Running build_artifacts from:", ROOT)
-
-# Ensure python path includes this directory so `ml` can be imported
-sys.path.insert(0, str(ROOT))
-
-try:
-    import ml
-except Exception as e:
-    print("Failed to import ml module:", e)
-    raise
-
-# 1) Load product features (this will create parquet if needed)
-print("Loading product features...")
-df_pf = ml.load_product_features()
-print(f"Product features shape: {df_pf.shape}")
-
-# 2) Build or load preprocessor & encoded features via get_feature_matrix()
-print("Building/applying preprocessor and encoded features...")
-encoded = ml.get_feature_matrix()
-print(f"Encoded features shape: {encoded.shape}")
-
-# 3) Build or load similarity matrix
-print("Building/loading similarity matrix (may take time)...")
-mat = ml.build_similarity_matrix()
-print("Similarity matrix shape:", getattr(mat, 'shape', 'unknown'))
-
-# 4) Confirm index map exists or create it
-try:
-    idx_map = ml.load_index_map()
-    print(f"Loaded index map with {len(idx_map)} entries")
-except Exception:
-    print("Index map missing; creating from product_features...")
+def check_mongo_connection():
+    """Verifies MongoDB connectivity before starting the build."""
     try:
-        df_pf = ml.load_product_features()
-        index_map = {str(pid): int(i) for i, pid in enumerate(df_pf['product_id'].astype(str).tolist())}
-        ml.save_index_map(index_map)
-        print(f"Index map saved with {len(index_map)} entries")
+        client = MongoClient(ml.MONGO_URI, serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')
+        print("MongoDB Connection: SUCCESS")
+        return client
     except Exception as e:
-        print("Failed to create index map:", e)
+        print(f"MongoDB Connection: FAILED - {e}")
+        sys.exit(1)
 
-print("Artifact build complete.")
+def load_and_clean_data(client):
+    """Extracts, deduplicates, and cleans raw data from MongoDB."""
+    db = client[ml.MONGO_DB]
+    collection = db[ml.MONGO_COLLECTION]
+    
+    products = list(collection.find())
+    if not products:
+        raise ValueError("No products found in MongoDB collection.")
+    
+    for p in products:
+        p.pop('_id', None)
+    df = pd.DataFrame(products)
+
+    # --- DEDUPLICATION ---
+    initial_count = len(df)
+    df = df.drop_duplicates(subset=['product_id'], keep='last')
+    print(f"Deduplication: Removed {initial_count - len(df)} duplicate products.")
+
+    # --- CLEANING ---
+    for col in ['discounted_price', 'actual_price']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('₹', '').str.replace(',', '')
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    if 'discount_percentage' in df.columns:
+        df['discount_percentage'] = df['discount_percentage'].astype(str).str.replace('%', '')
+        df['discount_percentage'] = pd.to_numeric(df['discount_percentage'], errors='coerce').fillna(0)
+    
+    if 'rating' in df.columns:
+        df['rating'] = pd.to_numeric(df['rating'], errors='coerce').fillna(0)
+
+    return df
+
+def run_automated_build(output_dir='../app/dataset'):
+    os.makedirs(output_dir, exist_ok=True)
+    client = check_mongo_connection()
+    df = load_and_clean_data(client)
+
+
+    # DELETE OLD CACHES to prevent the 'Hero-to-Zero' bug
+    paths_to_clear = [
+        os.path.join(output_dir, 'cosine_sim_sentiment.npy'),
+        os.path.join(output_dir, 'sentiment_scores.parquet')
+    ]
+    for p in paths_to_clear:
+        if os.path.exists(p):
+            os.remove(p)
+            print(f"Cleared old cache: {p}")
+
+    # Now run the generation
+    ml.build_and_save_sentiment_similarity(df)
+    
+    # 1. Save Parquet
+    parquet_path = os.path.join(output_dir, 'product_features.parquet')
+    df.to_parquet(parquet_path, index=False)
+    print(f"Artifact 1/4: Saved Parquet to {parquet_path}")
+
+    # 2. Generate Index Map
+    index_map = {str(pid): i for i, pid in enumerate(df['product_id'])}
+    index_map_path = os.path.join(output_dir, 'index_map.json')
+    with open(index_map_path, 'w') as f:
+        json.dump(index_map, f)
+    print(f"Artifact 2/4: Index Map generated")
+
+    print("Generating and Validating Similarity Matrices...")
+    
+    # Matrix Generation Tasks
+    tasks = [
+        ('cosine_sim.npy', ml.build_similarity_matrix),
+        ('cosine_sim_pca.npy', ml.build_similarity_matrix_with_pca),
+        ('cosine_sim_content.npy', lambda: ml.build_and_save_content_similarity(df)),
+        ('cosine_sim_content_pca.npy', lambda: ml.build_and_save_content_pca_similarity(df)), 
+        ('cosine_sim_reviews.npy', lambda: ml.build_and_save_review_similarity(df)),
+        ('cosine_sim_sentiment.npy', lambda: ml.build_and_save_sentiment_similarity(df)),
+        ('cosine_sim_topic.npy', lambda: ml.build_and_save_topic_similarity(df)),
+        ('cosine_sim_knn.npy', lambda: ml.build_and_save_knn_numeric_similarity(df))
+    ]
+
+    for filename, func in tasks:
+        print(f"Processing {filename}...")
+        func()  # Trigger the build in ml.py
+        
+        # Immediate Sanity Check
+        path = os.path.join(output_dir, filename)
+        try:
+            validate_matrix(path, filename)
+        except Exception as e:
+            print(f"🛑 BUILD HALTED: {e}")
+            sys.exit(1)
+
+    print("🚀 All artifacts are healthy and synchronized.")
+    
+   
+    if not df.empty:
+        ml.svd_product_recommendations(df, df['product_id'].iloc[0]) # SVD Factors
+
+    # 4. Save Joblib Models
+    cat_cols = ['category', 'product_name']
+    num_cols = ['rating', 'discounted_price', 'actual_price', 'discount_percentage']
+    
+    pre_path = os.path.join(output_dir, 'preprocessor.joblib')
+    ml.build_and_save_preprocessor(df, cat_cols, num_cols=num_cols, save_path=pre_path)
+    
+    print("Build Complete: All artifacts generated successfully.")
+
+def validate_matrix(matrix_path, name):
+    """
+    Sanity Check: Ensures the generated matrix is mathematically valid.
+    Prevents 'Hero-to-Zero' performance drops.
+    """
+    if not os.path.exists(matrix_path):
+        raise FileNotFoundError(f"CRITICAL: {name} was not created!")
+    
+    # Load with mmap to save RAM during validation
+    mat = np.load(matrix_path, mmap_mode='r')
+    
+    # Check 1: Is it empty or all zeros?
+    if np.all(mat == 0):
+        raise ValueError(f"CRITICAL: {name} is a zero-matrix. Data signal lost!")
+    
+    # Check 2: Check for NaNs
+    if np.isnan(mat).any():
+        print(f"WARNING: {name} contains NaNs. Filling with zeros...")
+    
+    # Check 3: Identity Check (Diagonal should be ~1.0 for cosine similarity)
+    diag_avg = np.diag(mat).mean()
+    if diag_avg < 0.9:
+        print(f"WARNING: {name} has a weak diagonal ({diag_avg:.2f}). Check indexing.")
+
+    print(f"✅ {name} validated successfully.")
+
+if __name__ == "__main__":
+    run_automated_build()

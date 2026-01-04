@@ -42,6 +42,7 @@ export default function ProductDisplayClient() {
   const [productError, setProductError] = useState<string | null>(null);
   const [recLoading, setRecLoading] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
+  const [recLatencyMs, setRecLatencyMs] = useState<number | null>(null);
   const searchParams = useSearchParams();
   const productId = searchParams.get('product_id');
 
@@ -97,52 +98,34 @@ export default function ProductDisplayClient() {
       setRecLoading(true);
       setRecError(null);
       setWeightedHybridRecs([]);
+      setRecLatencyMs(null);
+      const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
       try {
         // Fetch all recommendation types in parallel
         type RecommendationResponse = { recommendations: any[] };
 
         const [
-          classic,
           pca,
           review,
-          content,
           contentPca,
-          sentiment,
-          topic,
-          reviewerOverlap,
           svd,
-          knn,
           weighted
         ]: RecommendationResponse[] = await Promise.all([
-          getRecommendations(selectedProduct.product_id, 5),
           getRecommendationsPCA(selectedProduct.product_id, 5),
           getRecommendationsReviews(selectedProduct.product_id, 5),
-          getRecommendationsContent(selectedProduct.product_id, 5),
           getRecommendationsContentPCA(selectedProduct.product_id, 5),
-          getRecommendationsSentiment(selectedProduct.product_id, 5),
-          getRecommendationsTopic(selectedProduct.product_id, 5),
-          getRecommendationsReviewerOverlap(selectedProduct.product_id, 5),
           getRecommendationsSVD(selectedProduct.product_id, 5),
-          getRecommendationsKNN(selectedProduct.product_id, 5),
           getRecommendationsWeightedHybrid(selectedProduct.product_id, 5, {})
         ]);
 
         const allRecs = {
-          classic_recs: classic?.recommendations || [],
           pca_recs: pca?.recommendations || [],
           review_recs: review?.recommendations || [],
-          content_recs: content?.recommendations || [],
           content_pca_recs: contentPca?.recommendations || [],
-          sentiment_recs: sentiment?.recommendations || [],
-          topic_recs: topic?.recommendations || [],
-          reviewer_overlap_recs: reviewerOverlap?.recommendations || [],
           svd_recs: svd?.recommendations || [],
-          knn_recs: knn?.recommendations || [],
           recommendations: weighted?.recommendations || []
         };
-
-        // Store all recommendations in session storage
-        sessionStorage.setItem(`recs-${selectedProduct.product_id}`, JSON.stringify(allRecs));
 
         // Only set the weighted hybrid recs for display on this page
         setWeightedHybridRecs(allRecs.recommendations);
@@ -151,6 +134,8 @@ export default function ProductDisplayClient() {
         setRecError(String(err));
         setWeightedHybridRecs([]);
       } finally {
+        const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        setRecLatencyMs(Math.max(0, t1 - t0));
         setRecLoading(false);
       }
     };
@@ -230,21 +215,26 @@ export default function ProductDisplayClient() {
         )}
 
         {recLoading ? (
-        <div className="w-full max-w-2xl mt-8 flex justify-center">
-        <div className="flex items-center gap-3">
-        <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-      </svg>
-      <span className="text-gray-600">You may also like...</span>
-    </div>
-  </div>
-) : recError ? (
+          <div className="w-full max-w-2xl mt-8 flex justify-center">
+            <div className="flex items-center gap-3">
+              <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span className="text-gray-600">You may also like...</span>
+            </div>
+          </div>
+        ) : recError ? (
           <div className="w-full max-w-2xl mt-8 text-red-600">Error loading recommendations: {recError}</div>
         ) : (
           <div className="w-full max-w-5xl mt-8 flex flex-col gap-8">
             <div>
-              <h3 className="text-xl font-semibold mb-4">You may also like</h3>
+              <h3 className="text-xl font-semibold mb-4">
+                You may also like
+                {recLatencyMs !== null && (
+                  <span className="text-sm text-gray-500 ml-2"> (loaded in {Math.round(recLatencyMs)} ms)</span>
+                )}
+              </h3>
               <Slider {...sliderSettings}>
                 {uniqueByProductId(weightedHybridRecs).map((r: any) => (
                   <div key={r.product_id} className="px-2">
@@ -273,13 +263,14 @@ export default function ProductDisplayClient() {
           </div>
         )}
       </div>
+
       {selectedProduct && !recLoading && !recError && (
-    <div className="mt-8 text-center">
-    <Link href={`/product-display-recommend?product_id=${selectedProduct.product_id}`} className="text-blue-500 hover:underline">
-      Check recommendation computation
-    </Link>
-  </div>
-  )}
+        <div className="mt-8 text-center">
+          <Link href={`/product-display-recommend?product_id=${selectedProduct.product_id}`} className="text-blue-500 hover:underline">
+            Check recommendation computation
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

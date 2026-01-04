@@ -60,37 +60,98 @@ export default function ProductDisplayClient() {
     }
   }, [productId]);
 
-  // Load all recommendations from session storage
+  // Load all recommendations
   useEffect(() => {
     if (!selectedProduct) return;
 
+    const pid = selectedProduct.product_id;
     setRecLoading(true);
     setRecError(null);
-    try {
-      const storedRecsJSON = sessionStorage.getItem(`recs-${selectedProduct.product_id}`);
-      if (storedRecsJSON) {
-        const storedRecs = JSON.parse(storedRecsJSON);
-        setClassicRecs(storedRecs.classic_recs || []);
-        setPcaRecs(storedRecs.pca_recs || []);
-        setReviewRecs(storedRecs.review_recs || []);
-        setContentRecs(storedRecs.content_recs || []);
-        setContentPcaRecs(storedRecs.content_pca_recs || []);
-        setSentimentRecs(storedRecs.sentiment_recs || []);
-        setTopicRecs(storedRecs.topic_recs || []);
-        setReviewerOverlapRecs(storedRecs.reviewer_overlap_recs || []);
-        setHybridRecs(storedRecs.hybrid_recs || []);
-        setSvdRecs(storedRecs.svd_recs || []);
-        setKnnRecs(storedRecs.knn_recs || []);
-        setWeightedHybridRecs(storedRecs.recommendations || []);
-      } else {
-        setRecError("Recommendation data not found in session storage. Please go back to a product page to generate them first.");
+
+    const saveAndSet = (all: any) => {
+      setClassicRecs(all.classic_recs || []);
+      setPcaRecs(all.pca_recs || []);
+      setReviewRecs(all.review_recs || []);
+      setContentRecs(all.content_recs || []);
+      setContentPcaRecs(all.content_pca_recs || []);
+      setSentimentRecs(all.sentiment_recs || []);
+      setTopicRecs(all.topic_recs || []);
+      setReviewerOverlapRecs(all.reviewer_overlap_recs || []);
+      setHybridRecs(all.hybrid_recs || []);
+      setSvdRecs(all.svd_recs || []);
+      setKnnRecs(all.knn_recs || []);
+      setWeightedHybridRecs(all.recommendations || all.weighted || []);
+    };
+
+    (async () => {
+      // 2) Try server-side cached JSON
+      try {
+        const res = await fetch(`/api/recs_cache?product_id=${encodeURIComponent(pid)}`);
+        if (res.ok) {
+          const payload = await res.json();
+          if (payload && payload.recommendations) {
+            saveAndSet(payload);
+            setRecLoading(false);
+            return;
+          }
+        }
+      } catch (e) {
+        // continue to fallback
       }
-    } catch (e) {
-      console.error("Failed to parse stored recommendations", e);
-      setRecError("Failed to load recommendations from session storage.");
-    } finally {
-      setRecLoading(false);
-    }
+
+      // 3) Fallback: fetch weighted-hybrid quickly, render, then parallelize remaining models
+      try {
+        const ml = await import('@/lib/mlService');
+        const weighted = await (ml as any).getRecommendationsWeightedHybrid(pid, 5, {});
+        const initialAll: any = {
+          classic_recs: [], pca_recs: [], review_recs: [], content_recs: [], content_pca_recs: [],
+          sentiment_recs: [], topic_recs: [], reviewer_overlap_recs: [], svd_recs: [], knn_recs: [],
+          recommendations: weighted?.recommendations || weighted || []
+        };
+        saveAndSet(initialAll);
+
+        const results = await Promise.allSettled([
+          (ml as any).getRecommendations(pid, 5),
+          (ml as any).getRecommendationsPCA(pid, 5),
+          (ml as any).getRecommendationsReviews(pid, 5),
+          (ml as any).getRecommendationsContent(pid, 5),
+          (ml as any).getRecommendationsContentPCA(pid, 5),
+          (ml as any).getRecommendationsSentiment(pid, 5),
+          (ml as any).getRecommendationsTopic(pid, 5),
+          (ml as any).getRecommendationsReviewerOverlap(pid, 5),
+          (ml as any).getRecommendationsSVD(pid, 5),
+          (ml as any).getRecommendationsKNN(pid, 5)
+        ]);
+
+        const allRecs = {
+          classic_recs: results[0].status === 'fulfilled' ? (results[0] as any).value?.recommendations || (results[0] as any).value : [],
+          pca_recs: results[1].status === 'fulfilled' ? (results[1] as any).value?.recommendations || (results[1] as any).value : [],
+          review_recs: results[2].status === 'fulfilled' ? (results[2] as any).value?.recommendations || (results[2] as any).value : [],
+          content_recs: results[3].status === 'fulfilled' ? (results[3] as any).value?.recommendations || (results[3] as any).value : [],
+          content_pca_recs: results[4].status === 'fulfilled' ? (results[4] as any).value?.recommendations || (results[4] as any).value : [],
+          sentiment_recs: results[5].status === 'fulfilled' ? (results[5] as any).value?.recommendations || (results[5] as any).value : [],
+          topic_recs: results[6].status === 'fulfilled' ? (results[6] as any).value?.recommendations || (results[6] as any).value : [],
+          reviewer_overlap_recs: results[7].status === 'fulfilled' ? (results[7] as any).value?.recommendations || (results[7] as any).value : [],
+          svd_recs: results[8].status === 'fulfilled' ? (results[8] as any).value?.recommendations || (results[8] as any).value : [],
+          knn_recs: results[9].status === 'fulfilled' ? (results[9] as any).value?.recommendations || (results[9] as any).value : [],
+          recommendations: initialAll.recommendations
+        };
+
+        // If weighted hybrid is empty, try to fill from any returned source
+        if ((!allRecs.recommendations || allRecs.recommendations.length === 0) && initialAll.recommendations) {
+          allRecs.recommendations = initialAll.recommendations;
+        }
+
+        saveAndSet(allRecs);
+        setRecLoading(false);
+        return;
+      } catch (err) {
+        console.error('Recommendation fallback failed', err);
+        setRecError('Failed to load recommendations.');
+        setRecLoading(false);
+        return;
+      }
+    })();
   }, [selectedProduct]);
 
   // Utility to filter unique product_ids in an array

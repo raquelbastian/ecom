@@ -3,6 +3,12 @@ import numpy as np
 import os
 import json
 from pathlib import Path
+from sklearn.decomposition import TruncatedSVD
+import scipy.sparse as sp
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
+from sklearn.metrics.pairwise import rbf_kernel # Add this to imports at the top
+
 
 # Third-party imports: attempt to import but make module import-safe if missing
 SKLEARN_AVAILABLE = True
@@ -634,29 +640,42 @@ def load_content_pca_similarity(df, path: str = _content_pca_sim_path, n_compone
         return build_and_save_content_pca_similarity(df, path, n_components=n_components)
     return load_similarity_from_file(path)
 
-def get_content_recommendations_pca(product_id, N=5, n_components: int = 50):
-    """Return top-N recommendations using PCA-reduced content-based similarity (TF-IDF + PCA)."""
-    sim = load_content_pca_similarity(df, _content_pca_sim_path, n_components=n_components)
+def get_content_recommendations_pca(df, product_id, N=5):
+    """
+    Get N product recommendations based on content similarity after PCA.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame containing product information.
+        product_id (str): The product_id for which to find recommendations.
+        N (int): The number of recommendations to return.
+        
+    Returns:
+        pd.DataFrame: A DataFrame with the top N recommended products.
+    """
+    if df is None or cosine_sim_content_pca is None:
+        print("Data or model not loaded. Please run load_all_models() first.")
+        return pd.DataFrame()
+
     try:
-        idx_map = load_index_map(_reviews_index_map_path)
+        idx_map = load_index_map()
         idx = idx_map.get(str(product_id))
         if idx is None:
-            print(f"Product ID '{product_id}' not found in content PCA index map.")
-            return []
+            print(f"Product ID '{product_id}' not found in index map.")
+            return pd.DataFrame()
     except Exception:
         try:
             idx = int(df[df['product_id'] == product_id].index[0])
         except Exception:
             print(f"Product ID '{product_id}' not found.")
-            return []
-    sim_row = np.array(sim[idx])
-    sim_scores = list(enumerate(sim_row))
+            return pd.DataFrame()
+
+    sim_scores = list(enumerate(cosine_sim_content_pca[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
     product_indices = [i[0] for i in sim_scores]
-    agg = aggregate_product_content(df)
-    rec_ids = agg.iloc[product_indices]['product_id'].tolist()
-    recommended_products = df[df['product_id'].isin(rec_ids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
+    
+    # Return the top N most similar product details
+    recommended_products = _indices_to_recommendations(df, product_indices)
     return recommended_products
 
 # --- Sentiment-Based Recommendations ---
@@ -713,15 +732,27 @@ def aggregate_sentiment_parallel(df_input: pd.DataFrame) -> pd.DataFrame:
     
     return agg[['product_id', 'sentiment_score']]
 
-def build_and_save_sentiment_similarity(df_input: pd.DataFrame, path: str = _sentiment_sim_path):
-    """Compute and save cosine similarity matrix based on sentiment scores."""
-    agg = aggregate_sentiment(df_input)
+
+
+def build_and_save_sentiment_similarity(df: pd.DataFrame, path: str = _sentiment_sim_path):
+    """Compute and save similarity matrix based on sentiment DISTANCE."""
+    # Force fresh aggregation to clear parquet cache issues
+    agg = aggregate_sentiment_parallel(df)
+    
+    # Check if scores are actually varying
+    if agg['sentiment_score'].nunique() <= 1:
+        print("⚠️ WARNING: All products have the same sentiment score. check aggregate_sentiment_parallel.")
+
     X = agg[['sentiment_score']].values
-    sim = cosine_similarity(X)
+    # RBF Kernel treats 0.8 vs 0.2 as 'far away', unlike Cosine Similarity
+    sim = rbf_kernel(X, gamma=5.0) # Increased gamma to make it more sensitive
+    
     save_similarity_to_file(sim, path)
-    # Save index map (product_id -> row index)
-    index_map = {str(pid): int(i) for i, pid in enumerate(agg['product_id'].astype(str).tolist())}
-    save_index_map(index_map, _reviews_index_map_path)  # reuse index map path
+    
+    index_map = {str(pid): int(i) for i, pid in enumerate(agg['product_id'].tolist())}
+    save_index_map(index_map, _reviews_index_map_path)
+    
+    print(f"✅ Sentiment Matrix Rebuilt. New Mean Similarity: {np.mean(sim):.4f}")
     return sim
 
 def load_sentiment_similarity(df, path: str = _sentiment_sim_path):
@@ -781,30 +812,42 @@ def load_topic_similarity(df, path: str = _topic_sim_path, n_topics: int = 10):
         return build_and_save_topic_similarity(df, path, n_topics=n_topics)
     return load_similarity_from_file(path)
 
-def get_topic_recommendations(product_id, N=5, n_topics: int = 10):
-    """Return top-N recommendations using topic modeling (LDA) on reviews."""
-    sim = load_topic_similarity(df, _topic_sim_path, n_topics=n_topics)
+def get_topic_recommendations(df, product_id, N=5):
+    """
+    Get N product recommendations based on topic modeling similarity.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame containing product information.
+        product_id (str): The product_id for which to find recommendations.
+        N (int): The number of recommendations to return.
+        
+    Returns:
+        pd.DataFrame: A DataFrame with the top N recommended products.
+    """
+    if df is None or cosine_sim_topic is None:
+        print("Data or model not loaded. Please run load_all_models() first.")
+        return pd.DataFrame()
+
     try:
-        idx_map = load_index_map(_reviews_index_map_path)
+        idx_map = load_index_map()
         idx = idx_map.get(str(product_id))
         if idx is None:
-            print(f"Product ID '{product_id}' not found in topic index map.")
-            return []
+            print(f"Product ID '{product_id}' not found in index map.")
+            return pd.DataFrame()
     except Exception:
         try:
             idx = int(df[df['product_id'] == product_id].index[0])
         except Exception:
             print(f"Product ID '{product_id}' not found.")
-            return []
-    sim_row = np.array(sim[idx])
-    sim_scores = list(enumerate(sim_row))
+            return pd.DataFrame()
+
+    sim_scores = list(enumerate(cosine_sim_topic[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
     product_indices = [i[0] for i in sim_scores]
-    agg = aggregate_reviews(df)
-    rec_ids = agg.iloc[product_indices]['product_id'].tolist()
-    recommended_products = df[df['product_id'].isin(rec_ids)][['product_id', 'product_name', 'category', 'rating', 'discounted_price', 'img_link']]
-    return recommended_products
+    
+    # Return the top N most similar product details
+    recommended_products = _indices_to_recommendations(df, product_indices)
 
 def get_reviewer_overlap_recommendations(df, product_id, N=5):
     """Return top-N products reviewed by users who also reviewed the given product."""
@@ -1069,6 +1112,64 @@ def svd_product_recommendations(df, query_product_id, n=5):
     # Return DataFrame with product details
     return df[df['product_id'].isin(similar_product_ids)][['product_id', 'product_name', 'rating', 'discounted_price']].drop_duplicates(subset=['product_id'])
 
+# Create a global cache outside the function to store factors once computed
+_SVD_CACHE = {}
+
+def svd_product_recommendations_optimized(df, query_product_id, n=5, n_components=20):
+    """
+    High-speed SVD: Uses global caching and reduced dimensionality to prevent Timeouts.
+    """
+    global _SVD_CACHE
+    
+    # 1. Check if we need to build the model (only runs ONCE)
+    if not _SVD_CACHE:
+        print("⚡ First-time SVD build: Generating latent factors...")
+        prod_ids = df['product_id'].astype(str).unique().tolist()
+        user_ids = df['user_id'].astype(str).unique().tolist()
+        product_index = {pid: i for i, pid in enumerate(prod_ids)}
+        user_index = {uid: i for i, uid in enumerate(user_ids)}
+
+        # Map IDs to indices
+        rows = df['user_id'].astype(str).map(user_index).to_numpy()
+        cols = df['product_id'].astype(str).map(product_index).to_numpy()
+        vals = pd.to_numeric(df['rating'], errors='coerce').fillna(0).to_numpy()
+        
+        # Create Sparse Matrix (Users x Items)
+        user_item_sparse = sp.csr_matrix((vals, (rows, cols)), shape=(len(user_ids), len(prod_ids)))
+
+        # Factorize with lower components (20 is much faster than 50)
+        svd = TruncatedSVD(n_components=n_components, random_state=42)
+        item_factors = svd.fit_transform(user_item_sparse.T) 
+        
+        # Store in global cache
+        _SVD_CACHE = {
+            'item_factors': item_factors,
+            'product_index': product_index,
+            'prod_ids': prod_ids
+        }
+
+    # 2. Fast retrieval from Cache (Sub-10ms)
+    factors = _SVD_CACHE['item_factors']
+    p_idx_map = _SVD_CACHE['product_index']
+    p_ids = _SVD_CACHE['prod_ids']
+
+    qid = str(query_product_id)
+    if qid not in p_idx_map:
+        return pd.DataFrame()
+
+    qidx = p_idx_map[qid]
+    qvec = factors[qidx].reshape(1, -1)
+    
+    # Fast cosine similarity on the pre-computed factors
+    sims = cosine_similarity(qvec, factors).flatten()
+    
+    # 3. Rank and Return
+    order = np.argsort(-sims)
+    top_idxs = [int(i) for i in order if int(i) != qidx][:n]
+    top_pids = [p_ids[i] for i in top_idxs]
+    
+    return df[df['product_id'].isin(top_pids)].drop_duplicates(subset=['product_id'])
+
 # Load data and models
 df = None
 cosine_sim = None
@@ -1079,8 +1180,9 @@ def load_all_models(data_path='../app/dataset/'):
     global df, cosine_sim, cosine_sim_content, cosine_sim_pca, cosine_sim_content_pca, cosine_sim_reviews, cosine_sim_sentiment, cosine_sim_topic, index_map, pca, preprocessor
     
     try:
-        df = pd.read_parquet(os.path.join(data_path, 'amazon_clean.parquet'))
-        
+        df = pd.read_parquet(os.path.join(data_path, 'product_features.parquet'))
+        #df = pd.read_parquet('../data/processed/amazon_clean.parquet')
+
         # Load similarity matrices
         cosine_sim = load_similarity_from_file(os.path.join(data_path, 'cosine_sim.npy'))
         cosine_sim_content = load_similarity_from_file(os.path.join(data_path, 'cosine_sim_content.npy'))
@@ -1253,7 +1355,6 @@ def get_recommendations_with_pca(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_pca[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1292,7 +1393,6 @@ def get_content_recommendations(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_content[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1331,7 +1431,6 @@ def get_content_recommendations_pca(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_content_pca[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1370,7 +1469,6 @@ def get_review_recommendations(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_reviews[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1396,6 +1494,7 @@ def get_sentiment_recommendations(df, product_id, N=5):
         print("Data or model not loaded. Please run load_all_models() first.")
         return pd.DataFrame()
 
+
     try:
         idx_map = load_index_map()
         idx = idx_map.get(str(product_id))
@@ -1409,7 +1508,6 @@ def get_sentiment_recommendations(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_sentiment[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1448,7 +1546,6 @@ def get_topic_recommendations(df, product_id, N=5):
             print(f"Product ID '{product_id}' not found.")
             return pd.DataFrame()
 
-    idx = index_map[product_id]
     sim_scores = list(enumerate(cosine_sim_topic[idx]))
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
     sim_scores = sim_scores[1:N+1]
@@ -1498,68 +1595,81 @@ def get_reviewer_overlap_recommendations(df, product_id, N=5):
     
     return recommended_details.reset_index()
 
-def get_weighted_hybrid_recommendations(df, product_id, N=5, weights=None):
+def get_weighted_hybrid_recommendations(df, product_id, N=5, weights=None, timeout=2.0):
     """
-    10-Model Hybrid Engine: Combines every strategy into one weighted score.
-    Synchronized with 00_Eval.ipynb randomized search keys.
+    Parallelized 10-Model Hybrid Engine.
+    Triggers all experts simultaneously to minimize latency.
     """
     if df is None:
         print("Data not loaded. Please run load_all_models() first.")
         return pd.DataFrame()
 
-    # Define standard keys used for weights
+    # Define standard keys
     model_keys = [
         'basic_cosine', 'pca_features', 'content_tfidf', 'content_pca', 
         'review_text', 'sentiment', 'topic_lda', 'reviewer_overlap', 
-        'knn_numeric', 'svd_collaborative'
+        'knn_numeric', 'svd_collaborative_optimized'
     ]
 
     if weights is None:
-        # Default: equal weights
         weights = {k: 1.0/len(model_keys) for k in model_keys}
 
-    # Normalize weights so they sum to 1.0
     total = sum(weights.values())
     norm_weights = {k: v / total for k, v in weights.items()}
 
-    # Prepare specific data for KNN
+    # Preparation for KNN
     try:
         df_knn, X_knn = prepare_features_for_knn(df)
         p_idx = df[df['product_id'] == product_id].index[0]
     except Exception:
         p_idx = None
 
-    # Retrieve candidates from all 10 specialized experts
     n_pool = N * 2
-    recs_to_combine = {
-        'basic_cosine': get_recommendations(df, product_id, N=n_pool),
-        'pca_features': get_recommendations_with_pca(df, product_id, N=n_pool),
-        'content_tfidf': get_content_recommendations(df, product_id, N=n_pool),
-        'content_pca': get_content_recommendations_pca(df, product_id, N=n_pool),
-        'review_text': get_review_recommendations(df, product_id, N=n_pool),
-        'sentiment': get_sentiment_recommendations(df, product_id, N=n_pool),
-        'topic_lda': get_topic_recommendations(df, product_id, N=n_pool),
-        'reviewer_overlap': get_reviewer_overlap_recommendations(df, product_id, N=n_pool),
+    
+    # 1. Define the Task Mapping
+    # We use lambdas to wrap the functions so they can be called by the executor
+    tasks = {
+        'basic_cosine': lambda: get_recommendations(df, product_id, N=n_pool),
+        'pca_features': lambda: get_recommendations_with_pca(df, product_id, N=n_pool),
+        'content_tfidf': lambda: get_content_recommendations(df, product_id, N=n_pool),
+        'content_pca': lambda: get_content_recommendations_pca(df, product_id, N=n_pool),
+        'review_text': lambda: get_review_recommendations(df, product_id, N=n_pool),
+        'sentiment': lambda: get_sentiment_recommendations(df, product_id, N=n_pool),
+        'topic_lda': lambda: get_topic_recommendations(df, product_id, N=n_pool),
+        'reviewer_overlap': lambda: get_reviewer_overlap_recommendations(df, product_id, N=n_pool),
     }
-    
-    # Add KNN and SVD if indices were found
-    if p_idx is not None:
-        recs_to_combine['knn_numeric'] = get_knn_recommendations(df, X_knn, p_idx, n=n_pool)
-        recs_to_combine['svd_collaborative'] = svd_product_recommendations(df, product_id, n=n_pool)
 
-    # Weighted Borda count scoring to avoid KeyError
-    from collections import defaultdict
+    if p_idx is not None:
+        tasks['knn_numeric'] = lambda: get_knn_recommendations(df, X_knn, p_idx, n=n_pool)
+        tasks['svd_collaborative_optimized'] = lambda: svd_product_recommendations_optimized(df, product_id, n=n_pool)
+
+    recs_to_combine = {}
+
+    # 2. Execute Parallel Tasks
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        # Submit all tasks
+        future_to_model = {executor.submit(func): name for name, func in tasks.items()}
+        
+        # Collect results as they finish (or until timeout)
+        for future in as_completed(future_to_model, timeout=timeout):
+            model_name = future_to_model[future]
+            try:
+                recs_to_combine[model_name] = future.result()
+            except Exception as e:
+                print(f"Expert {model_name} failed or timed out: {e}")
+                recs_to_combine[model_name] = pd.DataFrame()
+
+    # 3. Weighted Borda Count Scoring
     final_scores = defaultdict(float)
-    
     for method, rec_df in recs_to_combine.items():
         if rec_df is not None and not rec_df.empty:
-            w = norm_weights.get(method, 0) # Uses .get() to safely handle missing keys
+            w = norm_weights.get(method, 0)
             pids = rec_df['product_id'].tolist()
+            pool_size = len(pids)
             for rank, pid in enumerate(pids):
-                # Points = weight * (pool_size - current_rank)
-                final_scores[pid] += w * (len(pids) - rank)
+                final_scores[pid] += w * (pool_size - rank)
 
-    # Sort and return results
+    # 4. Filter and Rank
     sorted_pids = [pid for pid, _ in sorted(final_scores.items(), key=lambda x: -x[1]) if pid != product_id]
     top_pids = sorted_pids[:N]
     
@@ -1621,3 +1731,38 @@ if __name__ == '__main__':
             print(f"\n--- Testing method: {method} ---")
             recommendations = find_similar_products(df, test_product_id, N=5, method=method)
             print(recommendations)
+            
+def get_recommendations_by_method(df, product_id, method='hybrid', N=5, weights=None):
+    """
+    Switchboard function to call specific recommendation experts by their string key.
+    """
+    if method == 'basic_cosine':
+        return get_recommendations(df, product_id, N)
+    elif method == 'pca_features':
+        return get_recommendations_with_pca(df, product_id, N)
+    elif method == 'content_tfidf':
+        return get_content_recommendations(df, product_id, N)
+    elif method == 'content_pca':
+        return get_content_recommendations_pca(df, product_id, N)
+    elif method == 'review_text':
+        return get_review_recommendations(df, product_id, N)
+    elif method == 'sentiment':
+        return get_sentiment_recommendations(df, product_id, N)
+    elif method == 'topic_lda':
+        return get_topic_recommendations(df, product_id, N)
+    elif method == 'reviewer_overlap':
+        return get_reviewer_overlap_recommendations(df, product_id, N)
+    elif method == 'knn_numeric':
+        # Ensure prepare_features_for_knn is called or results are cached
+        df_knn, X_knn = prepare_features_for_knn(df)
+        try:
+            p_idx = df[df['product_id'] == product_id].index[0]
+            return get_knn_recommendations(df_knn, X_knn, p_idx, n=N)
+        except:
+            return pd.DataFrame()
+    elif method == 'svd_collaborative_optimized':
+        return svd_product_recommendations_optimized(df, product_id, n=N)
+    elif method == 'hybrid':
+        return get_weighted_hybrid_recommendations(df, product_id, N, weights)
+    else:
+        raise ValueError(f"Invalid method: {method}")

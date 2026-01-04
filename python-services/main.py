@@ -135,32 +135,13 @@ def recommend_knn(product_id: str, n: int = 5):
         return {"recommendations": []}
 
 @app.post("/recommend_weighted_hybrid/{product_id}")
-def recommend_weighted_hybrid(
-    product_id: str,
-    n: int = 5,
-    req: WeightedHybridRequest = Body(...)
-):
-    weights = req.weights
-    if not weights:
-        # Default weights favoring your high-performance models (SVD, KNN, Overlap)
-        weights = {
-            'basic_cosine': 0.0293, 
-            'pca_features': 0.0883,
-            'content_tfidf': 0.2967,
-            'content_pca': 0.1711, 
-            'review_text': 0.0779, 
-            'sentiment': 0.0935,
-            'topic_lda': 0.0709, 
-            'reviewer_overlap': 0.1381, 
-            'knn_numeric': 0.0085,
-            'svd_collaborative': 0.0257
-        }
-
-    recs = get_weighted_hybrid_recommendations(product_id, N=n, weights=weights)
-
-    if isinstance(recs, pd.DataFrame):
-        return {"recommendations": recs.to_dict(orient="records")}
-    return {"recommendations": []}
+def recommend_weighted_hybrid(product_id: str, request: WeightedHybridRequest, n: int = 5):
+    """Return top-n weighted hybrid recommendations for a given product_id."""
+    recs, debug_info = get_weighted_hybrid_recommendations(product_id, N=n, weights=request.weights)
+    print(debug_info)  # Print debug info to the server console
+    if isinstance(recs, list):
+        return {"recommendations": recs, "debug_info": debug_info}
+    return {"recommendations": recs.to_dict(orient="records"), "debug_info": debug_info}
 
 @app.get("/trending_products")
 def trending_products(n: int = 8, min_rating: float = 4.0, min_reviews: int = 1):
