@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.12-slim
 
+# Install build dependencies for libraries like hnswlib
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake
+
 # Set the working directory in the container
 WORKDIR /app
 
