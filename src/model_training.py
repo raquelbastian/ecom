@@ -1595,7 +1595,7 @@ def get_reviewer_overlap_recommendations(df, product_id, N=5):
     
     return recommended_details.reset_index()
 
-def get_weighted_hybrid_recommendations(df, product_id, N=5, weights=None, timeout=2.0):
+def get_weighted_hybrid_recommendations(df, product_id, N=5, weights=None, model_keys=None, timeout=2.0):
     """
     Parallelized 10-Model Hybrid Engine.
     Triggers all experts simultaneously to minimize latency.
@@ -1605,11 +1605,17 @@ def get_weighted_hybrid_recommendations(df, product_id, N=5, weights=None, timeo
         return pd.DataFrame()
 
     # Define standard keys
-    model_keys = [
+    '''model_keys = [
         'basic_cosine', 'pca_features', 'content_tfidf', 'content_pca', 
         'review_text', 'sentiment', 'topic_lda', 'reviewer_overlap', 
         'knn_numeric', 'svd_collaborative_optimized'
-    ]
+    ]'''
+    if model_keys is None:
+        model_keys = [
+            'basic_cosine', 'pca_features', 'content_tfidf', 'content_pca', 
+            'review_text', 'sentiment', 'topic_lda', 'reviewer_overlap', 
+            'knn_numeric', 'svd_collaborative_optimized'
+        ]
 
     if weights is None:
         weights = {k: 1.0/len(model_keys) for k in model_keys}
