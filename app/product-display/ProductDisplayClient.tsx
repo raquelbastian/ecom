@@ -21,6 +21,7 @@ import {
 import Slider from 'react-slick';
 import "slick-carousel/slick/slick.css"; 
 import "slick-carousel/slick/slick-theme.css";
+import ProductGrid from '@/components/ProductGrid';
 
 interface Product {
   product_id: string;
@@ -45,50 +46,63 @@ export default function ProductDisplayClient() {
   const [recLatencyMs, setRecLatencyMs] = useState<number | null>(null);
   const searchParams = useSearchParams();
   const productId = searchParams.get('product_id');
+  const search = searchParams.get('search');
 
   useEffect(() => {
-    if (productId) {
+    const fetchProducts = async () => {
       setProductLoading(true);
       setProductError(null);
-      fetch(`/api/products?product_id=${encodeURIComponent(productId)}`)
-        .then(res => {
-          if (!res.ok) throw new Error(`Product request failed: ${res.status}`);
-          return res.json();
-        })
-        .then((data) => {
-          console.log('Fetched single product response:', data);
+      try {
+        let url = '/api/products';
+        const queryParams = new URLSearchParams();
+        if (productId) {
+          queryParams.append('product_id', productId);
+        } else if (search) {
+          queryParams.append('search', search);
+          queryParams.append('vectorSearch', 'true');
+        } else {
+          // By default, fetch a few random products
+          queryParams.append('limit', '12');
+          queryParams.append('rand', 'true');
+        }
+
+        if (queryParams.toString()) {
+          url += `?${queryParams.toString()}`;
+        }
+
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`Request failed: ${res.status}`);
+        }
+        const data = await res.json();
+
+        if (productId) {
           setSelectedProduct(data as Product);
           setProducts([data as Product]);
-        })
-        .catch(err => {
-          console.error('Error fetching single product:', err);
-          setProductError(String(err));
+        } else if (search) {
+          // Vector search returns a different structure
+          const productList = data.map((item: any) => ({
+            ...item,
+            _id: item._id.toString(),
+          }));
+          setProducts(productList);
           setSelectedProduct(null);
-        })
-        .finally(() => setProductLoading(false));
-      return;
-    }
-
-    // Fallback: fetch a short product list for navigation and selection
-    setProductLoading(true);
-    fetch('/api/products')
-      .then(res => res.json())
-      .then(data => {
-        console.log('Fetched /api/products response:', data);
-        const list = Array.isArray(data) ? data.slice(0, 10) : (data && data.products) || [];
-        setProducts(list);
-        if (productId) {
-          const found = list.find((p: any) => p.product_id === productId);
-          if (found) setSelectedProduct(found);
+        } else {
+          const list = Array.isArray(data) ? data : (data && data.products) || [];
+          setProducts(list);
+          setSelectedProduct(null);
         }
-      })
-      .catch(err => {
+      } catch (err) {
         console.error('Error fetching products:', err);
         setProducts([]);
         setProductError(String(err));
-      })
-      .finally(() => setProductLoading(false));
-  }, [productId]);
+      } finally {
+        setProductLoading(false);
+      }
+    };
+
+    fetchProducts();
+  }, [productId, search]);
 
   // Automatically load recommendations when a product is selected
   useEffect(() => {
@@ -184,10 +198,39 @@ export default function ProductDisplayClient() {
     ]
   };
 
+  if (search && !productId) {
+    return (
+      <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16 px-4">
+        <div className="w-full max-w-5xl mb-4">
+          <Link href="/" className="text-blue-500 hover:underline">
+            &larr; Back to Home
+          </Link>
+        </div>
+        <h1 className="text-3xl font-bold mb-8 text-black dark:text-zinc-50">
+          Search Results for &quot;{search}&quot;
+        </h1>
+        {productLoading ? (
+          <p>Loading...</p>
+        ) : productError ? (
+          <p className="text-red-500">Error: {productError}</p>
+        ) : (
+          <ProductGrid products={products} />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div>
-      <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16">
-        <h1 className="text-3xl font-bold mb-8 text-black dark:text-zinc-50">Product Details</h1>
+    <div className="container mx-auto p-4">
+      <Link href="/" className="text-blue-500 hover:underline mb-4 block">&larr; Back to Home</Link>
+      {productLoading && <p>Loading products...</p>}
+      {productError && <p className="text-red-500">Error: {productError}</p>}
+      
+      {/* Display Search Results */}
+      <div className="min-h-screen bg-zinc-50 dark:bg-black flex flex-col items-center py-16 px-4">
+        <h1 className="text-3xl font-bold mb-8 text-black dark:text-zinc-50">
+          {selectedProduct ? 'Product Details' : 'Products'}
+        </h1>
         {productLoading ? (
           <div className="w-full max-w-2xl border p-6 rounded-lg bg-white dark:bg-zinc-900 shadow text-center">Loading product...</div>
         ) : productError ? (
@@ -211,10 +254,12 @@ export default function ProductDisplayClient() {
             </div>
           </div>
         ) : (
-          <p>No product selected.</p>
+          <div className="w-full max-w-5xl">
+            <ProductGrid products={products} />
+          </div>
         )}
 
-        {recLoading ? (
+        {selectedProduct && recLoading ? (
           <div className="w-full max-w-2xl mt-8 flex justify-center">
             <div className="flex items-center gap-3">
               <svg className="animate-spin h-6 w-6 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
@@ -224,9 +269,9 @@ export default function ProductDisplayClient() {
               <span className="text-gray-600">You may also like...</span>
             </div>
           </div>
-        ) : recError ? (
+        ) : selectedProduct && recError ? (
           <div className="w-full max-w-2xl mt-8 text-red-600">Error loading recommendations: {recError}</div>
-        ) : (
+        ) : selectedProduct && (
           <div className="w-full max-w-5xl mt-8 flex flex-col gap-8">
             <div>
               <h3 className="text-xl font-semibold mb-4">

@@ -75,6 +75,13 @@ def run_automated_build(output_dir='../app/dataset'):
     df.to_parquet(parquet_path, index=False)
     print(f"Artifact 1/4: Saved Parquet to {parquet_path}")
 
+    # Also save a copy to data/processed
+    processed_dir = '../data/processed'
+    os.makedirs(processed_dir, exist_ok=True)
+    processed_parquet_path = os.path.join(processed_dir, 'product_features.parquet')
+    df.to_parquet(processed_parquet_path, index=False)
+    print(f"Saved additional copy to {processed_parquet_path}")
+
     # 2. Generate Index Map
     index_map = {str(pid): i for i, pid in enumerate(df['product_id'])}
     index_map_path = os.path.join(output_dir, 'index_map.json')

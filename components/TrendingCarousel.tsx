@@ -93,7 +93,7 @@ export default function TrendingCarousel({ trendingProducts }: TrendingCarouselP
                   }}
                 />
               )}
-              <h3 style={{ fontSize: 18, margin: '8px 0', minHeight: 48, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'normal', lineHeight: 1.2 }}>{product.product_name}</h3>
+              <h3 style={{ fontSize: 18, margin: '8px 0', minHeight: 48, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'normal', lineHeight: 1.2, color: 'black' }}>{product.product_name}</h3>
               <p style={{ fontWeight: 600, color: '#0070f3', margin: 0, fontSize: 20 }}>
                 ${product.discounted_price}
               </p>

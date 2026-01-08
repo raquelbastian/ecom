@@ -1,5 +1,6 @@
 // MongoDB connection utility for Next.js
 import { MongoClient } from 'mongodb';
+import { getEmbedding } from './embedding';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -32,8 +33,8 @@ if (process.env.NODE_ENV === 'development') {
 
 export default clientPromise;
 
-export async function getProducts(options: { category?: string; limit?: number; randomize?: boolean; productId?: string }) {
-  const { category, limit = 12, randomize = false, productId } = options;
+export async function getProducts(options: { category?: string; limit?: number; randomize?: boolean; productId?: string; search?: string, vectorSearch?: boolean }) {
+  const { category, limit = 12, randomize = false, productId, search, vectorSearch } = options;
   const client = await clientPromise;
   const db = client.db();
   const productsCollection = db.collection('products');
@@ -45,6 +46,7 @@ export async function getProducts(options: { category?: string; limit?: number; 
     const serialized = {
       ...product,
       _id: product._id?.toString?.(),
+      embedding: product.embedding, // Add this line to return the embedding
       discounted_price: product.discounted_price ?? product.discountedPrice ?? product.price ?? null,
       actual_price: product.actual_price ?? product.actualPrice ?? null,
       product_name: product.product_name ?? product.name ?? null,
@@ -53,10 +55,48 @@ export async function getProducts(options: { category?: string; limit?: number; 
     return serialized;
   }
 
+  if (vectorSearch && search) {
+    console.log(`Performing vector search for: "${search}"`);
+    const searchEmbedding = await getEmbedding(search);
+    console.log('Generated search embedding.');
+
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: 'vector_index',
+          queryVector: searchEmbedding,
+          path: 'embedding',
+          numCandidates: 100,
+          limit: limit,
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          product_id: 1,
+          product_name: 1,
+          about_product: 1,
+          img_link: 1,
+          discounted_price: 1,
+          actual_price: 1,
+          rating: 1,
+          score: { $meta: 'vectorSearchScore' },
+        },
+      },
+    ];
+
+    console.log('Executing vector search pipeline...');
+    const products = await productsCollection.aggregate(pipeline).toArray();
+    console.log(`Found ${products.length} products from vector search.`);
+    return products;
+  }
+
   // Build query. If `category` is supplied, try to match either an array field `categories`
   // (preferred long-term) or match a token inside the pipe-delimited `category` string.
   const query: any = {};
-  if (category) {
+  if (search) {
+    query.$text = { $search: search };
+  } else if (category) {
     // Normalize incoming category: remove whitespace so "Computers & Accessories" -> "Computers&Accessories"
     const normalized = category.replace(/\s+/g, '');
 
