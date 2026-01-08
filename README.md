@@ -1,55 +1,93 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# E-commerce Recommendation System
 
-## Getting Started
+This project is a full-stack e-commerce application featuring a sophisticated hybrid recommendation system. It's built with a Next.js frontend and a Python (FastAPI) backend that serves machine learning models. The primary goal is to deliver relevant and diverse product recommendations to users, enhancing their shopping experience.
 
-First, run the development server:
+## Live Demo
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+A live version of this application is deployed and available here:
+**[https://ecom-seven-xi-92.vercel.app/](https://ecom-seven-xi-92.vercel.app/)**
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Problem Statement
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+In a crowded e-commerce marketplace, helping users discover products they are likely to be interested in is crucial for engagement and sales. The challenge is to move beyond simple popularity-based suggestions and provide personalized recommendations that consider various factors like product content, user behavior, and item similarity. This project aims to build and evaluate a hybrid recommendation engine that combines multiple strategies to generate high-quality recommendations.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Dataset
 
-## Ecommerce Features
+The recommendation models are trained on the **Amazon Product Review Dataset**. This dataset contains product metadata and user reviews for a wide range of items, which is ideal for building content-based, collaborative filtering, and hybrid models.
 
-- Connects to MongoDB for product data
-- API route at `/api/products` fetches products from the database
-- Main page displays a product listing from MongoDB
+Key features include:
+- `product_id`: Unique identifier for each product.
+- `product_name`: The title of the product.
+- `category`: The product's category.
+- `rating`: User-provided rating for the product.
+- `about_product`: Detailed description.
+- `user_id`: Identifier for the user who wrote the review.
 
-### Setup
-1. Add your MongoDB connection string to `.env.local` as `MONGODB_URI`.
-2. Seed the database with sample products:
-   ```bash
-   npx tsx scripts/seedProducts.ts
-   ```
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
+## Installation and Setup
 
-Visit [http://localhost:3000](http://localhost:3000) to view the product listing.
+This project consists of a Next.js frontend and a Python backend. Follow these steps to set it up locally.
 
-## Learn More
+**1. Environment Setup**
+   - Create a `.env.local` file in the root directory and add your MongoDB connection string:
+     ```
+     MONGODB_URI="your_mongodb_connection_string"
+     ```
+   - **Important:** Ensure your MongoDB database is populated with the Amazon product dataset.
 
-To learn more about Next.js, take a look at the following resources:
+**2. Install Dependencies**
+   - **Frontend (Node.js):**
+     ```bash
+     npm install
+     ```
+   - **Backend (Python):**
+     It's recommended to use a virtual environment.
+     ```bash
+     # Create and activate a virtual environment
+     python3 -m venv python-services/source
+     source python-services/source/bin/activate
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+     # Install Python packages
+     pip install -r requirements.txt
+     ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## How to Run the Code
 
-## Deploy on Vercel
+**1. Build Machine Learning Artifacts**
+   - This script connects to your database, processes the data, and builds the necessary model files.
+   - From within your activated Python virtual environment:
+     ```bash
+     python python-services/build_artifacts.py
+     ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**2. Run the Application**
+   - You need to run two services in separate terminals.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   - **Terminal 1: Start the Python ML Service**
+     (Make sure your virtual environment is active)
+     ```bash
+     python3 -m uvicorn python-services.main:app --host 0.0.0.0 --port 8001
+     ```
+
+   - **Terminal 2: Start the Next.js Frontend**
+     ```bash
+     npm run dev
+     ```
+
+**3. View the Application**
+   - Visit [http://localhost:3000](http://localhost:3000) to view the product listing.
+
+## Results Summary
+
+The final recommendation system is a weighted hybrid model that combines the outputs of several individual recommendation strategies. The optimal weights for combining these models were determined using a **Random Search optimization process**. The strategies include:
+- **Content-Based (PCA) (Content-Based):** Utilizes PCA on content features for recommendations.
+- **Review Text-Based (Behavioral / Semantic):** Analyzes the semantic content of user reviews.
+- **Feature-Based (PCA) (Content-Based):** Employs PCA on product features to find similar items.
+- **Optimized Collaborative Filtering (SVD) Behavioral / Collaborative:** Uses Singular Value Decomposition on user-item interactions.
+
+The hybrid approach demonstrated superior performance compared to any single model, providing more relevant and diverse recommendations. The system is designed for real-time inference, with model artifacts pre-computed for low-latency responses.
+
+## Author Information
+
+- **Raquel Bastian**
+  - [GitHub](https://github.com/raquelbastian)
+  - [LinkedIn](https://www.linkedin.com/in/raquel-bastian/)
