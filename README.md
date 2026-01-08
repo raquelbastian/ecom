@@ -13,7 +13,10 @@ In a crowded e-commerce marketplace, helping users discover products they are li
 
 ## Dataset
 
-The recommendation models are trained on the **Amazon Product Review Dataset**. This dataset contains product metadata and user reviews for a wide range of items, which is ideal for building content-based, collaborative filtering, and hybrid models.
+The recommendation models are trained on the **Amazon Product Review Dataset**.
+https://www.kaggle.com/datasets/karkavelrajaj/amazon-sales-dataset
+
+This dataset contains product metadata and user reviews for a wide range of items, which is ideal for building content-based, collaborative filtering, and hybrid models.
 
 Key features include:
 - `product_id`: Unique identifier for each product.
@@ -78,16 +81,26 @@ This project consists of a Next.js frontend and a Python backend. Follow these s
 
 ## Results Summary
 
-The final recommendation system is a weighted hybrid model that combines the outputs of several individual recommendation strategies. The optimal weights for combining these models were determined using a **Random Search optimization process**. The strategies include:
-- **Content-Based (PCA) (Content-Based):** Utilizes PCA on content features for recommendations.
-- **Review Text-Based (Behavioral / Semantic):** Analyzes the semantic content of user reviews.
-- **Feature-Based (PCA) (Content-Based):** Employs PCA on product features to find similar items.
-- **Optimized Collaborative Filtering (SVD) Behavioral / Collaborative:** Uses Singular Value Decomposition on user-item interactions.
+The project began by evaluating a comprehensive suite of 10 different recommendation models. Through a rigorous evaluation process, this was refined into a final "Core 4" weighted hybrid model. The decision to shift from 10 models to 4 was driven by a holistic evaluation of multiple Key Performance Indicators (KPIs):
 
-The hybrid approach demonstrated superior performance compared to any single model, providing more relevant and diverse recommendations. The system is designed for real-time inference, with model artifacts pre-computed for low-latency responses.
+-   **Recommendation Latency:** The time taken to generate a recommendation.
+-   **Catalog Coverage:** The percentage of the total product catalog that the model recommends.
+-   **Mean Reciprocal Rank (MRR):** Measures the accuracy of the top-ranked item.
+-   **Normalized Discounted Cumulative Gain (NDCG):** Evaluates the quality of the entire ranked list of recommendations.
+
+The "Core 4" model demonstrated a **15x improvement in performance (lower latency)** while simultaneously **increasing catalog coverage by over 1%** compared to the 10-model hybrid. Furthermore, it maintained strong MRR and NDCG scores, indicating that the ranking quality and relevance of the recommendations were preserved despite the significant speed increase. This meant the leaner model was not only faster but also more effective at surfacing a wider variety of relevant products.
+
+The final recommendation system combines the outputs of these four top-performing strategies, with optimal weights determined through a **Random Search optimization process**:
+
+-   **Content-Based (PCA) (Content-Based):** Utilizes PCA on content features for recommendations.
+-   **Review Text-Based (Behavioral / Semantic):** Analyzes the semantic content of user reviews.
+-   **Feature-Based (PCA) (Content-Based):** Employs PCA on product features to find similar items.
+-   **Optimized Collaborative Filtering (SVD) (Behavioral / Collaborative):** Uses Singular Value Decomposition on user-item interactions.
+
+This hybrid approach provides a system that is not only fast and scalable for real-time inference but also delivers more relevant and diverse recommendations than any single model could achieve alone. All model artifacts are pre-computed to ensure low-latency responses in a production environment.
 
 ## Author Information
 
 - **Raquel Bastian**
   - [GitHub](https://github.com/raquelbastian)
-  - [LinkedIn](https://www.linkedin.com/in/raquel-bastian/)
+  - [LinkedIn](https://www.linkedin.com/in/raquel-b-b5100b12a/)
