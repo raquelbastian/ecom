@@ -1,0 +1,1 @@
+MONGODB_URI=mongodb+srv://raquelbastian_db_user:oXu3M164d7HEwcVL@capstone.jucteam.mongodb.net/capstone?retryWrites=true&w=majority&appName=capstone
