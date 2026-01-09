@@ -8,8 +8,13 @@ import Link from 'next/link';
 interface Product {
   product_id: string;
   product_name: string;
+  category: string;
+  actual_price: string;
+  discounted_price: string;
+  rating: string;
+  rating_count: string;
+  about_product: string;
   img_link: string;
-  // Add other product fields as needed
 }
 
 export default function SearchClient() {
