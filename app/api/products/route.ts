@@ -27,3 +27,4 @@ export async function GET(request: Request) {
 }
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // Increase timeout to 60 seconds
