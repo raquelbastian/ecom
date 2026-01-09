@@ -75,11 +75,13 @@ export async function getProducts(options: { category?: string; limit?: number; 
           _id: 1,
           product_id: 1,
           product_name: 1,
+          category: 1, // Added category
           about_product: 1,
           img_link: 1,
           discounted_price: 1,
           actual_price: 1,
           rating: 1,
+          rating_count: 1, // Added rating_count
           score: { $meta: 'vectorSearchScore' },
         },
       },
