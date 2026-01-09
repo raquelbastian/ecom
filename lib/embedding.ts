@@ -10,8 +10,8 @@ class EmbeddingSingleton {
 
     static async getInstance(progress_callback?: Function) {
         if (!this.instance) {
-            console.log('Initializing new embedder pipeline...');
-            this.instance = pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+            console.log('Initializing new embedder pipeline with all-MiniLM-L12-v2...');
+            this.instance = pipeline('feature-extraction', 'Xenova/all-MiniLM-L12-v2', {
                 quantized: true,
                 progress_callback,
             });
