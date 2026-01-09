@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import clientPromise from '../../../lib/db';
-import { getEmbedding } from '../../../lib/openai';
+import clientPromise from '../../../lib/mongodb';
+import { getEmbedding } from '../../../lib/embedding';
 
 export async function GET(request: Request) {
   try {
