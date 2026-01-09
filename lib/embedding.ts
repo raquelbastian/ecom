@@ -2,8 +2,8 @@ import { pipeline, env, PipelineType } from '@xenova/transformers';
 
 // Allow local models
 env.allowLocalModels = true;
-// Set cache path to a writable directory
-env.cacheDir = '/tmp/transformers';
+// Specify a cache directory
+env.cacheDir = '/tmp/transformers_cache';
 
 class EmbeddingSingleton {
   static task: PipelineType = 'feature-extraction';
