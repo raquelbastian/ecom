@@ -31,9 +31,11 @@ Key features include:
 This project consists of a Next.js frontend and a Python backend. Follow these steps to set it up locally.
 
 **1. Environment Setup**
-   - Create a `.env.local` file in the root directory and add your MongoDB connection string:
+   - Create a `.env.local` file in the root directory and add your credentials:
      ```
      MONGODB_URI="your_mongodb_connection_string"
+     HF_INFERENCE_ENDPOINT_URL="your_hugging_face_endpoint_url"
+     HF_ACCESS_TOKEN="your_hugging_face_access_token"
      ```
    - **Important:** Ensure your MongoDB database is populated with the Amazon product dataset.
 
@@ -98,6 +100,19 @@ The final recommendation system combines the outputs of these four top-performin
 -   **Optimized Collaborative Filtering (SVD) (Behavioral / Collaborative):** Uses Singular Value Decomposition on user-item interactions.
 
 This hybrid approach provides a system that is not only fast and scalable for real-time inference but also delivers more relevant and diverse recommendations than any single model could achieve alone. All model artifacts are pre-computed to ensure low-latency responses in a production environment.
+
+### AI-Powered Semantic Search
+
+In addition to recommendations, the application features a powerful semantic search engine powered by generative AI. The architecture is designed for performance and scalability, especially within a serverless environment like Vercel.
+
+Here’s how it works:
+
+1.  **Offline Embedding Generation:** Product information (names, descriptions) is converted into numerical vector embeddings using a script that runs locally (`scripts/generateEmbeddings.ts`). This script uses the `Xenova/all-MiniLM-L6-v2` transformer model to generate embeddings for the entire product catalog.
+2.  **Vector Database:** The generated embeddings are stored in a MongoDB Atlas collection, which is indexed for efficient, high-speed vector similarity searches.
+3.  **Real-time Search with Hugging Face Endpoint:** When a user enters a search query, the application does **not** load the model in the serverless function. Instead, it sends the query to a dedicated **Hugging Face Inference Endpoint**. This endpoint, which hosts the same transformer model, converts the query into an embedding and returns it.
+4.  **Vector Search:** The embedding received from the Hugging Face endpoint is used to perform a vector similarity search against the MongoDB database to find products with the most semantically similar embeddings.
+
+This architecture avoids serverless "cold starts" and timeout errors by offloading the resource-intensive task of real-time embedding generation to a dedicated, always-on inference service. This results in a fast, reliable, and scalable search experience.
 
 ## Author Information
 
