@@ -21,7 +21,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
 
     if (!response.ok) {
         const errorBody = await response.text();
-        console.error('Hugging Face Inference API error:', errorBody);
+        console.error('Hugging Face Inference API error response body:', errorBody);
         throw new Error(`Failed to get embedding from Hugging Face Inference API. Status: ${response.status}`);
     }
 
