@@ -22,7 +22,8 @@ export async function GET(request: Request) {
     return NextResponse.json(products);
   } catch (error) {
     console.error('Error fetching products:', error);
-    return NextResponse.json({ error: 'Failed to fetch products' }, { status: 500 });
+    // Return the error message in the response temporarily to aid debugging on Vercel.
+    return NextResponse.json({ error: 'Failed to fetch products', details: String(error) }, { status: 500 });
   }
 }
 
