@@ -26,8 +26,21 @@ _data_dir = Path(__file__).parent.joinpath('../app/dataset').resolve()
 _abs_csv_path = _data_dir.joinpath('amazon.csv')
 product_features_path = _data_dir.joinpath('product_features.csv')
 
-# MongoDB connection settings
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://raquelbastian_db_user:oXu3M164d7HEwcVL@capstone.jucteam.mongodb.net")
+# Load .env.local from the repo root for local development (no-op if python-dotenv
+# is not installed or the file doesn't exist; in production use real env vars)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / '.env.local')
+except ImportError:
+    pass
+
+# MongoDB connection settings — no hardcoded fallback; credentials must come from the environment
+MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI")
+if not MONGO_URI:
+    raise RuntimeError(
+        "MONGO_URI (or MONGODB_URI) environment variable is not set. "
+        "Set it in .env.local for local dev, or in your hosting platform's environment settings."
+    )
 MONGO_DB = os.environ.get("MONGO_DB", "capstone")
 MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "products")
 
@@ -891,10 +904,10 @@ def get_weighted_hybrid_recommendations(product_id, N=5, weights=None, timeout=1
     # 1. Define Optimized Core 4 Weights
     if weights is None:
         weights = {
-            "content_pca": 0.3788,
-            "review": 0.1624,
-            "pca_features": 0.2592,
-            "svd_optimized": 0.1996
+            "content_pca": 0.4789,
+            "review": 0.0585,
+            "pca_features": 0.3446,
+            "svd_optimized": 0.1180
         }
 
     # 2. Define Core 4 Expert Tasks

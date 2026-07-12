@@ -4,9 +4,8 @@ from fastapi import FastAPI, Request, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
-from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml, svd_product_recommendations, prepare_features_for_knn, get_knn_recommendations
+from .ml import print_head, df, get_recommendations, get_recommendations_with_pca, get_review_recommendations, get_content_recommendations, get_sentiment_recommendations, get_content_recommendations_pca, get_topic_recommendations, get_reviewer_overlap_recommendations, get_weighted_hybrid_recommendations, get_trending_products_ml, svd_product_recommendations, prepare_features_for_knn, get_knn_recommendations, MONGO_URI, MONGO_DB, MONGO_COLLECTION
 from pymongo import MongoClient
-import os
 import pandas as pd
 
 app = FastAPI()
@@ -148,10 +147,7 @@ def trending_products(n: int = 8, min_rating: float = 4.0, min_reviews: int = 1)
     """
     Return top-n trending products based on the number of positive reviews (rating >= min_rating).
     """
-    # MongoDB connection settings (reuse env vars if available)
-    MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://raquelbastian_db_user:oXu3M164d7HEwcVL@capstone.jucteam.mongodb.net")
-    MONGO_DB = os.environ.get("MONGO_DB", "capstone")
-    MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "products")
+    # MongoDB connection settings come from ml.py (validated env vars, no hardcoded fallback)
     client = MongoClient(MONGO_URI)
     db = client[MONGO_DB]
     collection = db[MONGO_COLLECTION]

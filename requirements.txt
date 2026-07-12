@@ -12,3 +12,4 @@ pymongo
 matplotlib
 seaborn
 hnswlib
+python-dotenv
