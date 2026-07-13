@@ -1,93 +1,69 @@
-export async function getEmbedding(text: string): Promise<number[]> {
-    const endpointUrl = process.env.HF_INFERENCE_ENDPOINT_URL;
-    const accessToken = process.env.HF_ACCESS_TOKEN;
+// Embeddings via Voyage AI (https://docs.voyageai.com)
+// Replaces the previous Hugging Face Inference Endpoint implementation —
+// serverless API, no cold starts, consistent response shape.
 
-    if (!endpointUrl || !accessToken) {
-        throw new Error('Hugging Face Inference Endpoint URL or Access Token is not configured.');
+const VOYAGE_API_URL = 'https://api.voyageai.com/v1/embeddings';
+const VOYAGE_MODEL = 'voyage-3.5-lite'; // 1024 dimensions
+
+// Voyage distinguishes how the text will be used, which improves retrieval:
+// 'query'    → search queries typed by users
+// 'document' → product texts stored in the database
+export type EmbeddingInputType = 'query' | 'document';
+
+export async function getEmbeddings(
+    texts: string[],
+    inputType: EmbeddingInputType
+): Promise<number[][]> {
+    const apiKey = process.env.VOYAGE_API_KEY;
+    if (!apiKey) {
+        throw new Error('VOYAGE_API_KEY is not configured.');
     }
-
-    console.log(`Querying Hugging Face Inference Endpoint for: "${text}"`);
 
     let response: Response;
     try {
-        response = await fetch(endpointUrl, {
+        response = await fetch(VOYAGE_API_URL, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${accessToken}`,
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ inputs: text }),
+            body: JSON.stringify({
+                input: texts,
+                model: VOYAGE_MODEL,
+                input_type: inputType,
+            }),
         });
     } catch (err) {
-        console.error('Network error calling Hugging Face Inference API:', err);
-        throw new Error('Network error when calling Hugging Face Inference API.');
+        console.error('Network error calling Voyage AI API:', err);
+        throw new Error('Network error when calling Voyage AI API.');
     }
 
     const resText = await response.text();
 
     if (!response.ok) {
-        console.error('Hugging Face Inference API error response body:', resText);
-        throw new Error(`Failed to get embedding from Hugging Face Inference API. Status: ${response.status}. Body: ${resText}`);
+        console.error('Voyage AI API error response body:', resText);
+        throw new Error(`Voyage AI API error. Status: ${response.status}. Body: ${resText}`);
     }
 
-    let data: any;
-    try {
-        data = JSON.parse(resText);
-    } catch (err) {
-        console.error('Failed to parse Hugging Face response as JSON:', resText);
-        throw new Error('Invalid JSON response from Hugging Face Inference API.');
+    const data = JSON.parse(resText);
+    if (!Array.isArray(data?.data) || data.data.length !== texts.length) {
+        console.error('Unexpected Voyage AI response shape:', data);
+        throw new Error('Unexpected response shape from Voyage AI API.');
     }
 
-    // If HF returned an error object
-    if (data && typeof data === 'object' && 'error' in data) {
-        console.error('Hugging Face returned error object:', data);
-        throw new Error(`Hugging Face Inference API error: ${data.error}`);
+    // data.data entries carry an `index` matching the input order
+    return data.data
+        .sort((a: { index: number }, b: { index: number }) => a.index - b.index)
+        .map((d: { embedding: number[] }) => d.embedding);
+}
+
+export async function getEmbedding(
+    text: string,
+    inputType: EmbeddingInputType = 'query'
+): Promise<number[]> {
+    const [embedding] = await getEmbeddings([text], inputType);
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+        throw new Error('Empty embedding received from Voyage AI API.');
     }
-
-    // Common response shapes:
-    // 1) Flat array: [0.1, 0.2, ...]
-    // 2) Nested array: [[0.1, 0.2, ...]]
-    // 3) Object with fields: { embedding: [...] } or { embeddings: [...] } or { outputs: [...] }
-
-    if (Array.isArray(data)) {
-        if (data.length === 0) {
-            console.error('Empty array received from Hugging Face API');
-            throw new Error('Empty embedding received from Hugging Face Inference API.');
-        }
-        // nested
-        if (Array.isArray(data[0]) && typeof data[0][0] === 'number') {
-            console.log('Embedding retrieved successfully from endpoint (nested array).');
-            return data[0];
-        }
-        // flat
-        if (typeof data[0] === 'number') {
-            console.log('Embedding retrieved successfully from endpoint (flat array).');
-            return data;
-        }
-    }
-
-    if (data && typeof data === 'object') {
-        if (Array.isArray(data.embedding) && typeof data.embedding[0] === 'number') {
-            console.log('Embedding retrieved from object.embedding');
-            return data.embedding;
-        }
-        if (Array.isArray(data.embeddings) && typeof data.embeddings[0] === 'number') {
-            console.log('Embedding retrieved from object.embeddings');
-            return data.embeddings;
-        }
-        if (Array.isArray(data.outputs) && data.outputs.length > 0) {
-            const out = data.outputs[0];
-            if (Array.isArray(out) && typeof out[0] === 'number') {
-                console.log('Embedding retrieved from outputs[0]');
-                return out;
-            }
-            if (out && Array.isArray(out.embedding)) {
-                console.log('Embedding retrieved from outputs[0].embedding');
-                return out.embedding;
-            }
-        }
-    }
-
-    console.error('Invalid embedding format received from Hugging Face Inference API:', data);
-    throw new Error('Invalid embedding format received from Hugging Face Inference API.');
+    return embedding;
 }
