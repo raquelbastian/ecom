@@ -22,10 +22,13 @@ interface ChatMessage {
   content: string;
 }
 
+const ASSISTANT_TOGGLE_KEY = 'aiAssistantEnabled';
+
 export default function SearchClient() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [assistantEnabled, setAssistantEnabled] = useState(false);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -33,6 +36,19 @@ export default function SearchClient() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
   const query = searchParams.get('query');
+
+  // Restore the toggle after mount (localStorage is client-only)
+  useEffect(() => {
+    setAssistantEnabled(localStorage.getItem(ASSISTANT_TOGGLE_KEY) === 'true');
+  }, []);
+
+  const toggleAssistant = () => {
+    setAssistantEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem(ASSISTANT_TOGGLE_KEY, String(next));
+      return next;
+    });
+  };
 
   const sendToAssistant = async (history: ChatMessage[]) => {
     setChatLoading(true);
@@ -83,14 +99,17 @@ export default function SearchClient() {
     };
 
     fetchProducts();
+  }, [query]);
 
-    // Start the assistant conversation with the search query as first turn
+  // Start (or restart) the assistant conversation when the toggle is on
+  useEffect(() => {
+    if (!query || !assistantEnabled) return;
     const initialChat: ChatMessage[] = [{ role: 'user', content: query }];
     setChat(initialChat);
     setChatAvailable(true);
     sendToAssistant(initialChat);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, assistantEnabled]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -109,9 +128,34 @@ export default function SearchClient() {
   return (
     <div className="container mx-auto p-4">
       <Link href="/" className="text-blue-500 hover:underline mb-4 block">&larr; Back to Home</Link>
-      <h1 className="text-2xl font-bold mb-4">Search Results for "{query}"</h1>
 
-      {chatAvailable && chat.length > 0 && (
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Search Results for "{query}"</h1>
+
+        <button
+          type="button"
+          onClick={toggleAssistant}
+          aria-pressed={assistantEnabled}
+          className="flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-sm shadow-sm transition hover:border-indigo-300"
+        >
+          <span className={assistantEnabled ? 'font-medium text-indigo-600' : 'text-gray-500'}>
+            ✨ AI Shopping Assistant
+          </span>
+          <span
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
+              assistantEnabled ? 'bg-indigo-600' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${
+                assistantEnabled ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </span>
+        </button>
+      </div>
+
+      {assistantEnabled && chatAvailable && chat.length > 0 && (
         <div className="mb-6 rounded-lg border border-indigo-200 bg-indigo-50 p-4">
           <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-indigo-500">
             ✨ AI Shopping Assistant
