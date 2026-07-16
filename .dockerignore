@@ -1,0 +1,22 @@
+# Backup folders — not needed by the ML service (and not in git either)
+app/dataset/bak
+app/dataset/bak2
+app/dataset/bak_01-07
+app/dataset/bak_f
+
+# Not part of the Python service image
+node_modules
+.next
+.git
+.venv
+notebooks
+data
+docs
+scripts
+components
+lib
+public
+src/__pycache__
+python-services/__pycache__
+*.pyc
+.env*
