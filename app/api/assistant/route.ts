@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
   if (!process.env.ANTHROPIC_API_KEY) {
     console.warn('ANTHROPIC_API_KEY is not set; skipping AI answer.');
-    return NextResponse.json({ answer: null }, { status: 200 });
+    return new Response(null, { status: 204 });
   }
 
   // R — Retrieval for the latest user message
@@ -100,26 +100,45 @@ export async function POST(request: Request) {
       : { role: m.role, content: m.content }
   );
 
-  // G — Generation, grounded in retrieved products
+  // G — Generation, grounded in retrieved products.
+  // Streamed so the first words reach the user in ~1-2s instead of
+  // waiting for the full answer to finish generating.
   try {
     const anthropic = new Anthropic();
-    const response = await anthropic.messages.create({
+    const claudeStream = anthropic.messages.stream({
       model: 'claude-opus-4-8',
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: claudeMessages,
     });
 
-    const answer = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block as { type: 'text'; text: string }).text)
-      .join('');
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        claudeStream.on('text', (text) => controller.enqueue(encoder.encode(text)));
+        claudeStream.on('end', () => controller.close());
+        claudeStream.on('error', (err) => {
+          console.error('Assistant stream failed:', err);
+          controller.close(); // partial text already sent is still useful
+        });
+      },
+      cancel() {
+        claudeStream.abort();
+      },
+    });
 
-    return NextResponse.json({ answer: answer || null });
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      },
+    });
   } catch (err) {
     console.error('Assistant generation failed:', err);
-    return NextResponse.json({ answer: null }, { status: 200 });
+    return new Response(null, { status: 204 });
   }
 }
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // allow long generations on Vercel

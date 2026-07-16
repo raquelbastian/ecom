@@ -58,14 +58,30 @@ export default function SearchClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: history }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.answer) {
-          setChat([...history, { role: 'assistant', content: data.answer }]);
-        } else if (history.length === 1) {
-          // First turn returned nothing — hide the chat entirely
-          setChatAvailable(false);
-        }
+
+      if (res.status !== 200 || !res.body) {
+        // 204 = assistant unavailable (no key / no answer)
+        if (history.length === 1) setChatAvailable(false);
+        return;
+      }
+
+      // Stream the answer — render words as they arrive
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let answer = '';
+      setChatLoading(false);
+      setChat([...history, { role: 'assistant', content: '' }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        answer += decoder.decode(value, { stream: true });
+        setChat([...history, { role: 'assistant', content: answer }]);
+      }
+
+      if (!answer && history.length === 1) {
+        setChatAvailable(false);
+        setChat(history);
       }
     } catch {
       if (history.length === 1) setChatAvailable(false);
